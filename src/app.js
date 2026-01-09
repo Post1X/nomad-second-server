@@ -2,7 +2,6 @@ import createError from 'http-errors';
 import express from 'express';
 import path from 'path';
 import cookieParser from 'cookie-parser';
-import logger from 'morgan';
 import cors from 'cors';
 import indexRouter from './routes';
 import mongooseConnect from './helpers/mongooseConnect';
@@ -22,7 +21,11 @@ app.use(cors({
 app.set('views', path.join(__dirname, 'views'));
 app.set('view engine', 'jade');
 
-app.use(logger('dev'));
+app.use((req, res, next) => {
+  logger.info(`${req.method} ${req.path} - ${req.ip}`);
+  next();
+});
+
 app.use(express.json({ limit: `${MAX_FIELDS_SIZE_MB}mb` }));
 app.use(express.urlencoded({ extended: true, limit: `${MAX_FIELDS_SIZE_MB}mb` }));
 app.use(cookieParser());
