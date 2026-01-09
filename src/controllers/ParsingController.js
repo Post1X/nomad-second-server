@@ -225,7 +225,13 @@ class ParsingController {
             .sort({ batch_number: 1 })
             .lean();
 
-          const events = parsedEvents.map(pe => pe.event_data);
+          const events = parsedEvents.map(pe => {
+            const eventData = pe.event_data;
+            if (eventData && !eventData.operationId) {
+              eventData.operationId = operation._id.toString();
+            }
+            return eventData;
+          });
 
           operationData.events = events;
           operationData.totalEvents = events.length;

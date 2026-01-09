@@ -7,6 +7,11 @@ const OperationsSchema = new mongoose.Schema({
     enum: Object.values(OPERATION_TYPES),
     required: true,
   },
+  admin: {
+    type: Schema.Types.ObjectId,
+    required: false,
+    ref: 'Admins',
+  },
   status: {
     type: String,
     enum: Object.values(OPERATION_STATUSES),

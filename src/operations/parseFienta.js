@@ -334,6 +334,7 @@ async function parseFienta({ meta, operationId }) {
                 date_end: dateEnd,
                 source: EVENT_SOURCE.fienta,
                 address: parsed.address || cityToken || '',
+                operationId: operationId,
               };
 
               if (fallbackCoords?.lat && fallbackCoords?.lon) {

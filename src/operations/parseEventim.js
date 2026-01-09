@@ -287,6 +287,7 @@ async function parseEventim({ meta, operationId }) {
           admin_id: adminId,
           country_id: resolvedCountryId,
           city_id: resolvedCityId,
+          operationId: operationId,
           contacts: { website: event.eventLink || series.esLink || '' },
           photos: photoUrl ? [{ full_url: photoUrl }] : [],
           holding_date: holdingDate,

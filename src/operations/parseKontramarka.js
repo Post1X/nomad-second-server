@@ -224,6 +224,7 @@ async function parseKontramarka({ meta, operationId }) {
                 admin_id: adminId,
                 country_id: resolvedCountryId,
                 city_id: resolvedCityId,
+                operationId: operationId,
                 contacts: { website: tourUrl },
                 photos: (slot.image || photoUrl) ? [{ full_url: slot.image || photoUrl }] : [],
                 holding_date: holdingDate,
