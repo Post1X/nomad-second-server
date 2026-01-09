@@ -1,8 +1,16 @@
 import moment from 'moment';
 import puppeteer from 'puppeteer';
+import CitiesSchema from '../schemas/CitiesSchema';
 import OperationsSchema from '../schemas/OperationsSchema';
 import ParsedEventsSchema from '../schemas/ParsedEventsSchema';
 import { EVENT_SOURCE } from '../helpers/constants';
+import { createLoggerWithSource } from '../helpers/logger';
+
+const logger = createLoggerWithSource('PARSE_KONTRAMARKA');
+
+const citiesCache = {
+  gr: null,
+};
 
 const normalize = (str = '') => str
   .toString()
@@ -65,6 +73,12 @@ const poolAll = async (items, limit, worker) => {
   return results.flat().filter(Boolean);
 };
 
+const loadCities = async () => {
+  if (citiesCache.gr) return citiesCache.gr;
+  citiesCache.gr = await CitiesSchema.find({}).lean();
+  return citiesCache.gr;
+};
+
 const logProgress = async (operationId, message) => {
   if (operationId) {
     try {
@@ -76,7 +90,7 @@ const logProgress = async (operationId, message) => {
         await operation.save();
       }
     } catch (e) {
-      console.error('Error logging progress:', e);
+      logger.error(`Error logging progress: ${e.message || e}`);
     }
   }
 };
@@ -93,8 +107,7 @@ async function parseKontramarka({ meta, operationId }) {
       adminId, countryId, cityId, specialization = 'Event', maxCities, cityName,
     } = meta || {};
     
-    // Используем города из meta.cities (переданные с основного сервера)
-    const citiesAll = meta.cities || [];
+    const citiesAll = await loadCities();
     let cities = citiesAll;
     if (cityName) {
       const normalized = cityName.toLowerCase();
@@ -270,7 +283,6 @@ async function parseKontramarka({ meta, operationId }) {
     await logProgress(operationId, `FATAL ERROR: ${errMsg}`);
   }
 
-  // Сохранение событий частями (по 10)
   const BATCH_SIZE = 10;
   const eventsToSave = allEvents || [];
   try {
@@ -286,14 +298,12 @@ async function parseKontramarka({ meta, operationId }) {
         }))
       );
       
-      // Обновление прогресса в infoText
       const operation = await OperationsSchema.findById(operationId);
       await OperationsSchema.findByIdAndUpdate(operationId, {
         infoText: `${operation?.infoText || ''}\nОбработано ${i + batch.length} из ${eventsToSave.length} событий. Батч ${batchNumber} из ${Math.ceil(eventsToSave.length / BATCH_SIZE)}`,
       });
     }
     
-    // Финальное обновление операции
     await OperationsSchema.findByIdAndUpdate(operationId, {
       status: 'success',
       finish_time: new Date(),

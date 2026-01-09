@@ -9,6 +9,16 @@ const app = require('../app');
 const debug = require('debug')('nomad-second-server:server');
 const http = require('http');
 
+let logger;
+import('../helpers/logger.js').then((module) => {
+  logger = module.createLoggerWithSource('SERVER');
+}).catch(() => {
+  logger = {
+    info: (msg) => console.log(`SERVER | ${new Date().toISOString()} | ${msg}`),
+    error: (msg) => console.error(`SERVER | ${new Date().toISOString()} | ${msg}`),
+  };
+});
+
 /**
  * Get port from environment and store in Express.
  */
@@ -64,13 +74,21 @@ function onError(error) {
     : 'Port ' + port;
 
   // handle specific listen errors with friendly messages
+  const logError = (msg) => {
+    if (logger) {
+      logger.error(msg);
+    } else {
+      console.error(`SERVER | ${new Date().toISOString()} | ${msg}`);
+    }
+  };
+
   switch (error.code) {
     case 'EACCES':
-      console.error(bind + ' requires elevated privileges');
+      logError(`${bind} requires elevated privileges`);
       process.exit(1);
       break;
     case 'EADDRINUSE':
-      console.error(bind + ' is already in use');
+      logError(`${bind} is already in use`);
       process.exit(1);
       break;
     default:
@@ -88,6 +106,14 @@ function onListening() {
     ? 'pipe ' + addr
     : 'port ' + addr.port;
   debug('Listening on ' + bind);
-  console.log('Server listening on ' + bind);
+  
+  const logInfo = (msg) => {
+    if (logger) {
+      logger.info(msg);
+    } else {
+      console.log(`SERVER | ${new Date().toISOString()} | ${msg}`);
+    }
+  };
+  
+  logInfo(`Server listening on ${bind}`);
 }
-

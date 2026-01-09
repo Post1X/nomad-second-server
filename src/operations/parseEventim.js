@@ -8,11 +8,19 @@ import { createGunzip } from 'zlib';
 import { exec } from 'child_process';
 import { promisify } from 'util';
 import { URL } from 'url';
+import CitiesSchema from '../schemas/CitiesSchema';
 import OperationsSchema from '../schemas/OperationsSchema';
 import ParsedEventsSchema from '../schemas/ParsedEventsSchema';
 import { EVENT_SOURCE } from '../helpers/constants';
+import { createLoggerWithSource } from '../helpers/logger';
+
+const logger = createLoggerWithSource('PARSE_EVENTIM');
 
 const execPromise = promisify(exec);
+
+const citiesCache = {
+  list: null,
+};
 
 const normalize = (str = '') => str
   .toString()
@@ -53,6 +61,12 @@ const parseCoordinatesField = (coord) => {
     }
   }
   return null;
+};
+
+const loadCities = async () => {
+  if (citiesCache.list) return citiesCache.list;
+  citiesCache.list = await CitiesSchema.find({}).lean();
+  return citiesCache.list;
 };
 
 const downloadFile = async (url, destPath, password = null, username = null) => {
@@ -167,7 +181,7 @@ const logProgress = async (operationId, message) => {
         await operation.save();
       }
     } catch (e) {
-      console.error('Error logging progress:', e);
+      logger.error(`Error logging progress: ${e.message || e}`);
     }
   }
 };
@@ -182,8 +196,7 @@ async function parseEventim({ meta, operationId }) {
       eventimUrl,
     } = meta || {};
     
-    // Используем города из meta.cities (переданные с основного сервера)
-    const cities = meta.cities || [];
+    const cities = await loadCities();
 
     await logProgress(operationId, 'Starting Eventim parsing...');
 
@@ -320,7 +333,6 @@ async function parseEventim({ meta, operationId }) {
     await logProgress(operationId, `FATAL ERROR: ${errMsg}`);
   }
 
-  // Сохранение событий частями (по 10)
   const BATCH_SIZE = 10;
   try {
     for (let i = 0; i < events.length; i += BATCH_SIZE) {
@@ -335,14 +347,12 @@ async function parseEventim({ meta, operationId }) {
         }))
       );
       
-      // Обновление прогресса в infoText
       const operation = await OperationsSchema.findById(operationId);
       await OperationsSchema.findByIdAndUpdate(operationId, {
         infoText: `${operation?.infoText || ''}\nОбработано ${i + batch.length} из ${events.length} событий. Батч ${batchNumber} из ${Math.ceil(events.length / BATCH_SIZE)}`,
       });
     }
     
-    // Финальное обновление операции
     await OperationsSchema.findByIdAndUpdate(operationId, {
       status: 'success',
       finish_time: new Date(),

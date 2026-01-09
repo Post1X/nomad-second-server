@@ -1,9 +1,17 @@
 import moment from 'moment';
 import puppeteer from 'puppeteer';
 import { load as cheerioLoad } from 'cheerio';
+import CitiesSchema from '../schemas/CitiesSchema';
 import OperationsSchema from '../schemas/OperationsSchema';
 import ParsedEventsSchema from '../schemas/ParsedEventsSchema';
 import { EVENT_SOURCE } from '../helpers/constants';
+import { createLoggerWithSource } from '../helpers/logger';
+
+const logger = createLoggerWithSource('PARSE_FIENTA');
+
+const citiesCache = {
+  list: null,
+};
 
 const normalize = (str = '') => str
   .toString()
@@ -44,6 +52,12 @@ const parseCoordinatesField = (coord) => {
     }
   }
   return null;
+};
+
+const loadCities = async () => {
+  if (citiesCache.list) return citiesCache.list;
+  citiesCache.list = await CitiesSchema.find({}).lean();
+  return citiesCache.list;
 };
 
 async function extractEventFromPageHtml(html, cityName) {
@@ -181,7 +195,7 @@ const logProgress = async (operationId, message) => {
         await operation.save();
       }
     } catch (e) {
-      console.error('Error logging progress:', e);
+      logger.error(`Error logging progress: ${e.message || e}`);
     }
   }
 };
@@ -194,8 +208,7 @@ async function parseFienta({ meta, operationId }) {
     adminId, countryId, cityId, cityName, specialization = 'Event', maxCities,
   } = meta || {};
   
-  // Используем города из meta.cities (переданные с основного сервера)
-  const citiesAll = meta.cities || [];
+  const citiesAll = await loadCities();
   
   let cities = citiesAll;
   if (cityName || cityId) {
@@ -373,15 +386,11 @@ async function parseFienta({ meta, operationId }) {
     await logProgress(operationId, `Parsing completed. Total: ${events.length} events parsed`);
   }
 
-  // Ограничение на уровне ссылок ограничивает количество парсируемых страниц,
-  // но одно событие может иметь несколько дат, поэтому может быть > 5 событий
-  // Ограничиваем финальный результат до 5 событий
   if (events.length > 5) {
     events.splice(5);
     errorTexts.push(`Limited to 5 events for testing (total parsed: ${events.length})`);
   }
 
-  // Сохранение событий частями (по 10)
   const BATCH_SIZE = 10;
   try {
     for (let i = 0; i < events.length; i += BATCH_SIZE) {
@@ -396,14 +405,12 @@ async function parseFienta({ meta, operationId }) {
         }))
       );
       
-      // Обновление прогресса в infoText
       const operation = await OperationsSchema.findById(operationId);
       await OperationsSchema.findByIdAndUpdate(operationId, {
         infoText: `${operation?.infoText || ''}\nОбработано ${i + batch.length} из ${events.length} событий. Батч ${batchNumber} из ${Math.ceil(events.length / BATCH_SIZE)}`,
       });
     }
     
-    // Финальное обновление операции
     await OperationsSchema.findByIdAndUpdate(operationId, {
       status: 'success',
       finish_time: new Date(),

@@ -32,6 +32,10 @@ const OperationsSchema = new mongoose.Schema({
     type: Boolean,
     default: false,
   },
+  is_taken: {
+    type: Boolean,
+    default: false,
+  },
 }, {
   timestamps: true,
 });

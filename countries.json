@@ -1,0 +1,450 @@
+[
+  {
+    "_id": {"$oid": "65f8b4085a5736ee8b0e0d5d"},
+    "__v": 0,
+    "createdAt": {"$date": "2024-03-18T21:37:12.781Z"},
+    "flag_url": "/images/flags/Сербия6ce35c7f-7892-45f4-9587-40764548570e.png",
+    "name": "Сербия",
+    "updatedAt": {"$date": "2025-11-22T19:03:16.662Z"}
+  },
+  {
+    "_id": {"$oid": "65f8b44b5a5736ee8b0e0d8b"},
+    "__v": 0,
+    "createdAt": {"$date": "2024-03-18T21:38:19.787Z"},
+    "flag_url": "/images/flags/Черногория134334be-8a88-487b-a9d0-4d9bed2d8abb.png",
+    "name": "Черногория",
+    "updatedAt": {"$date": "2025-12-01T21:14:44.252Z"}
+  },
+  {
+    "_id": {"$oid": "665700848152f36dbed55fa5"},
+    "__v": 0,
+    "createdAt": {"$date": "2024-05-29T10:16:36.659Z"},
+    "flag_url": "/images/flags/Грузия751c639a-a9f9-4481-9c40-9d3cc12557f3.png",
+    "name": "Грузия",
+    "updatedAt": {"$date": "2025-12-01T21:16:34.066Z"}
+  },
+  {
+    "_id": {"$oid": "665700908152f36dbed55fd3"},
+    "__v": 0,
+    "createdAt": {"$date": "2024-05-29T10:16:48.211Z"},
+    "flag_url": "/images/flags/Польшаefe0166b-5d8f-4c2c-afd6-43b789253286.png",
+    "name": "Польша",
+    "updatedAt": {"$date": "2025-12-04T18:00:34.425Z"}
+  },
+  {
+    "_id": {"$oid": "66a214b3ee4ffb5e2b48150e"},
+    "__v": 0,
+    "createdAt": {"$date": "2024-07-25T09:02:43.393Z"},
+    "flag_url": "/images/flags/Турция5dd392a6-224c-40f6-bf3c-4c8f484b9346.png",
+    "name": "Турция",
+    "updatedAt": {"$date": "2025-11-30T12:19:56.229Z"}
+  },
+  {
+    "_id": {"$oid": "67403d9598ce6ee997706706"},
+    "__v": 0,
+    "createdAt": {"$date": "2024-11-22T08:15:17.040Z"},
+    "flag_url": "/images/flags/Франция2e6560cd-01db-4f4f-9e94-e113df216d97.png",
+    "name": "Франция",
+    "updatedAt": {"$date": "2025-11-27T10:47:06.985Z"}
+  },
+  {
+    "_id": {"$oid": "67418d3e98ce6ee9977071a6"},
+    "__v": 0,
+    "createdAt": {"$date": "2024-11-23T08:07:26.114Z"},
+    "flag_url": "/images/flags/Германия9b8d94d0-665f-47a2-afa9-91bc0e3c078b.png",
+    "name": "Германия",
+    "updatedAt": {"$date": "2025-11-26T10:07:59.548Z"}
+  },
+  {
+    "_id": {"$oid": "6777f4225da940a22e6179fb"},
+    "__v": 0,
+    "createdAt": {"$date": "2025-01-03T14:28:50.364Z"},
+    "flag_url": "/images/flags/Испанияad088963-adaf-419d-b13d-3bf5f546ca0e.png",
+    "name": "Испания",
+    "updatedAt": {"$date": "2025-11-23T10:51:40.959Z"}
+  },
+  {
+    "_id": {"$oid": "6777f4365da940a22e617a2a"},
+    "__v": 0,
+    "createdAt": {"$date": "2025-01-03T14:29:10.321Z"},
+    "flag_url": "/images/flags/Босния и Герцеговина45459362-cf36-4580-8918-ade509020dcf.png",
+    "name": "Босния и Герцеговина",
+    "updatedAt": {"$date": "2025-10-25T10:02:08.971Z"}
+  },
+  {
+    "_id": {"$oid": "67af01aeffb030b6113b9f6c"},
+    "__v": 0,
+    "createdAt": {"$date": "2025-02-14T08:41:18.298Z"},
+    "flag_url": "/images/flags/Румыния61f456df-21f6-4c73-ab6b-0f0891ccc9d7.png",
+    "name": "Румыния",
+    "updatedAt": {"$date": "2025-11-23T10:53:04.840Z"}
+  },
+  {
+    "_id": {"$oid": "67af01beffb030b6113b9f9b"},
+    "__v": 0,
+    "createdAt": {"$date": "2025-02-14T08:41:34.630Z"},
+    "flag_url": "/images/flags/Болгарияd31f6c45-6935-47f6-8bb5-d4659cc6e296.png",
+    "name": "Болгария",
+    "updatedAt": {"$date": "2025-10-25T10:02:36.641Z"}
+  },
+  {
+    "_id": {"$oid": "67af01cdffb030b6113b9fca"},
+    "__v": 0,
+    "createdAt": {"$date": "2025-02-14T08:41:49.053Z"},
+    "flag_url": "/images/flags/Нидерландыd6d518d8-736e-4cd0-8b20-5a3391cb253d.png",
+    "name": "Нидерланды",
+    "updatedAt": {"$date": "2025-11-27T10:16:52.080Z"}
+  },
+  {
+    "_id": {"$oid": "67af01d8ffb030b6113b9ff9"},
+    "__v": 0,
+    "createdAt": {"$date": "2025-02-14T08:42:00.175Z"},
+    "flag_url": "/images/flags/Литваb873eb50-e8de-46c9-9d8a-05fa216b13e7.png",
+    "name": "Литва",
+    "updatedAt": {"$date": "2025-11-14T20:45:24.239Z"}
+  },
+  {
+    "_id": {"$oid": "67af01f2ffb030b6113ba07c"},
+    "__v": 0,
+    "createdAt": {"$date": "2025-02-14T08:42:26.972Z"},
+    "flag_url": "/images/flags/Чехия5af0c417-09f1-4835-aee1-fccb9e528503.png",
+    "name": "Чехия",
+    "updatedAt": {"$date": "2025-11-14T20:42:50.508Z"}
+  },
+  {
+    "_id": {"$oid": "67af0200ffb030b6113ba0ab"},
+    "__v": 0,
+    "createdAt": {"$date": "2025-02-14T08:42:40.285Z"},
+    "flag_url": "/images/flags/Словакия6f697191-e8ef-4713-92e1-38bb1b158f8c.png",
+    "name": "Словакия",
+    "updatedAt": {"$date": "2025-11-23T10:54:58.423Z"}
+  },
+  {
+    "_id": {"$oid": "67af020effb030b6113ba0da"},
+    "__v": 0,
+    "createdAt": {"$date": "2025-02-14T08:42:54.604Z"},
+    "flag_url": "/images/flags/Хорватия04e90f55-e6ca-492a-b0a6-468b7ba33793.png",
+    "name": "Хорватия",
+    "updatedAt": {"$date": "2025-11-14T20:41:02.522Z"}
+  },
+  {
+    "_id": {"$oid": "67af021dffb030b6113ba109"},
+    "__v": 0,
+    "createdAt": {"$date": "2025-02-14T08:43:09.067Z"},
+    "flag_url": "/images/flags/Эстония126228af-d98f-437a-9ae8-542d1437800f.png",
+    "name": "Эстония",
+    "updatedAt": {"$date": "2025-11-23T10:56:17.970Z"}
+  },
+  {
+    "_id": {"$oid": "67af0304ffb030b6113ba162"},
+    "__v": 0,
+    "createdAt": {"$date": "2025-02-14T08:47:00.172Z"},
+    "flag_url": "/images/flags/Латвия80d8f9e1-1507-4576-988d-d0764ee49ebb.png",
+    "name": "Латвия",
+    "updatedAt": {"$date": "2025-11-23T10:57:35.086Z"}
+  },
+  {
+    "_id": {"$oid": "67b8c988ffb030b6113c47b8"},
+    "__v": 0,
+    "createdAt": {"$date": "2025-02-21T18:44:24.154Z"},
+    "flag_url": "/images/flags/Португалия0c0c4d76-dfce-4492-94fc-4ccaf72e945d.png",
+    "name": "Португалия",
+    "updatedAt": {"$date": "2025-11-23T10:58:31.905Z"}
+  },
+  {
+    "_id": {"$oid": "67bb12a4ffb030b6113c8262"},
+    "__v": 0,
+    "createdAt": {"$date": "2025-02-23T12:20:52.362Z"},
+    "flag_url": "/images/flags/Кипрfcd7e919-e2b1-4ce3-8bf8-e2b9bf087444.png",
+    "name": "Кипр",
+    "updatedAt": {"$date": "2025-11-14T20:38:40.434Z"}
+  },
+  {
+    "_id": {"$oid": "67bb139effb030b6113c8385"},
+    "__v": 0,
+    "createdAt": {"$date": "2025-02-23T12:25:02.465Z"},
+    "flag_url": "/images/flags/Италия56bc3fa6-71d9-4523-9053-eddbb49f3fac.png",
+    "name": "Италия",
+    "updatedAt": {"$date": "2025-11-26T12:44:23.089Z"}
+  },
+  {
+    "_id": {"$oid": "67bb14c3ffb030b6113c8564"},
+    "__v": 0,
+    "createdAt": {"$date": "2025-02-23T12:29:55.583Z"},
+    "flag_url": "/images/flags/Бельгияeb649813-a97c-4ec8-be4d-999e72473b22.png",
+    "name": "Бельгия",
+    "updatedAt": {"$date": "2025-11-27T08:26:02.535Z"}
+  },
+  {
+    "_id": {"$oid": "67bb1595ffb030b6113c8689"},
+    "__v": 0,
+    "createdAt": {"$date": "2025-02-23T12:33:25.076Z"},
+    "flag_url": "/images/flags/Албанияcc612151-c051-409e-9299-14b99cc5d22b.png",
+    "name": "Албания",
+    "updatedAt": {"$date": "2025-11-14T20:33:42.556Z"}
+  },
+  {
+    "_id": {"$oid": "67bb15dfffb030b6113c86be"},
+    "__v": 0,
+    "createdAt": {"$date": "2025-02-23T12:34:39.129Z"},
+    "flag_url": "/images/flags/Великобритания0befbbb2-7953-4531-b93f-781d82f38c9d.png",
+    "name": "Великобритания",
+    "updatedAt": {"$date": "2025-11-24T14:50:20.625Z"}
+  },
+  {
+    "_id": {"$oid": "67bb1624ffb030b6113c871d"},
+    "__v": 0,
+    "createdAt": {"$date": "2025-02-23T12:35:48.623Z"},
+    "flag_url": "/images/flags/Австрияdf11bd55-61db-4bce-a590-26ac6cb079bc.png",
+    "name": "Австрия",
+    "updatedAt": {"$date": "2025-11-14T20:31:49.244Z"}
+  },
+  {
+    "_id": {"$oid": "67bb167bffb030b6113c87b0"},
+    "__v": 0,
+    "createdAt": {"$date": "2025-02-23T12:37:15.535Z"},
+    "flag_url": "/images/flags/Швейцарияbcf27bcf-c620-4637-8a0d-697bd4f38f94.png",
+    "name": "Швейцария",
+    "updatedAt": {"$date": "2025-11-14T20:30:33.069Z"}
+  },
+  {
+    "_id": {"$oid": "67bb16cbffb030b6113c8814"},
+    "__v": 0,
+    "createdAt": {"$date": "2025-02-23T12:38:35.087Z"},
+    "flag_url": "/images/flags/Данияe76bb159-0b13-4524-9715-acb226bcb945.png",
+    "name": "Дания",
+    "updatedAt": {"$date": "2025-11-14T20:29:52.893Z"}
+  },
+  {
+    "_id": {"$oid": "67bb16fdffb030b6113c8873"},
+    "__v": 0,
+    "createdAt": {"$date": "2025-02-23T12:39:25.575Z"},
+    "flag_url": "/images/flags/Венгрия04c0ae75-f880-48b3-bfe9-dd17ebee8710.png",
+    "name": "Венгрия",
+    "updatedAt": {"$date": "2025-11-14T20:28:33.419Z"}
+  },
+  {
+    "_id": {"$oid": "67c812d7c2142c6dfb6f74d3"},
+    "__v": 0,
+    "createdAt": {"$date": "2025-03-05T09:01:11.267Z"},
+    "flag_url": "/images/flags/Ирландия1a3cc88f-6a8e-4993-9074-8c228d57de79.png",
+    "name": "Ирландия",
+    "updatedAt": {"$date": "2025-11-14T20:27:57.224Z"}
+  },
+  {
+    "_id": {"$oid": "67c813e0c2142c6dfb6f7596"},
+    "__v": 0,
+    "createdAt": {"$date": "2025-03-05T09:05:36.175Z"},
+    "flag_url": "/images/flags/Греция970a6ad4-c57c-48b7-b94b-ee4e1aa6cdda.png",
+    "name": "Греция",
+    "updatedAt": {"$date": "2025-11-14T20:27:00.009Z"}
+  },
+  {
+    "_id": {"$oid": "67c81493c2142c6dfb6f7649"},
+    "__v": 0,
+    "createdAt": {"$date": "2025-03-05T09:08:35.832Z"},
+    "flag_url": "/images/flags/Израильa69196bf-62b5-4340-a468-f2c960ad735f.png",
+    "name": "Израиль",
+    "updatedAt": {"$date": "2025-11-23T11:00:15.634Z"}
+  },
+  {
+    "_id": {"$oid": "67c82147c2142c6dfb6f7b03"},
+    "__v": 0,
+    "createdAt": {"$date": "2025-03-05T10:02:47.395Z"},
+    "flag_url": "/images/flags/ОАЭ26bba302-ed77-4fbe-a1f2-70d28127d5be.png",
+    "name": "ОАЭ",
+    "updatedAt": {"$date": "2025-10-25T09:40:54.870Z"}
+  },
+  {
+    "_id": {"$oid": "67c8228ec2142c6dfb6f7d1c"},
+    "__v": 0,
+    "createdAt": {"$date": "2025-03-05T10:08:14.351Z"},
+    "flag_url": "/images/flags/Вьетнам8f582bee-d57d-4cad-8cbc-8eba5505e332.png",
+    "name": "Вьетнам",
+    "updatedAt": {"$date": "2025-10-25T10:00:34.903Z"}
+  },
+  {
+    "_id": {"$oid": "67c82397c2142c6dfb6f8012"},
+    "__v": 0,
+    "createdAt": {"$date": "2025-03-05T10:12:39.741Z"},
+    "flag_url": "/images/flags/Таиланд8dd6b829-103f-4ae2-ad0f-d12c96ec3145.png",
+    "name": "Таиланд",
+    "updatedAt": {"$date": "2025-10-25T09:32:59.625Z"}
+  },
+  {
+    "_id": {"$oid": "67c8257bc2142c6dfb6f81db"},
+    "__v": 0,
+    "createdAt": {"$date": "2025-03-05T10:20:43.578Z"},
+    "flag_url": "/images/flags/Египет9aecd220-50ff-4335-9a16-dc7b5ef943d8.png",
+    "name": "Египет",
+    "updatedAt": {"$date": "2025-10-25T09:58:04.379Z"}
+  },
+  {
+    "_id": {"$oid": "67c828e0c2142c6dfb6f84a4"},
+    "__v": 0,
+    "createdAt": {"$date": "2025-03-05T10:35:12.825Z"},
+    "flag_url": "/images/flags/Китайc9052d88-a829-4afe-8d55-519123417de3.png",
+    "name": "Китай",
+    "updatedAt": {"$date": "2025-10-25T09:45:20.866Z"}
+  },
+  {
+    "_id": {"$oid": "67c82a64c2142c6dfb6f86b3"},
+    "__v": 0,
+    "createdAt": {"$date": "2025-03-05T10:41:40.819Z"},
+    "flag_url": "/images/flags/Япония5a669339-0f7a-4e27-858f-083b9cbabb89.png",
+    "name": "Япония",
+    "updatedAt": {"$date": "2025-10-25T08:27:51.962Z"}
+  },
+  {
+    "_id": {"$oid": "67d1c470e0c16d5b681218d7"},
+    "__v": 0,
+    "createdAt": {"$date": "2025-03-12T17:29:20.638Z"},
+    "flag_url": "/images/flags/Норвегия5078ea0a-be5d-4cc5-84dc-b4899786f11e.png",
+    "name": "Норвегия",
+    "updatedAt": {"$date": "2025-11-14T20:25:53.357Z"}
+  },
+  {
+    "_id": {"$oid": "67d1c4eee0c16d5b68121ab9"},
+    "__v": 0,
+    "createdAt": {"$date": "2025-03-12T17:31:26.258Z"},
+    "flag_url": "/images/flags/Швецияa7307cd1-4d66-49cb-8e03-7ea424a43158.png",
+    "name": "Швеция",
+    "updatedAt": {"$date": "2025-11-14T20:24:41.521Z"}
+  },
+  {
+    "_id": {"$oid": "67d1c578e0c16d5b68121cbd"},
+    "__v": 0,
+    "createdAt": {"$date": "2025-03-12T17:33:44.939Z"},
+    "flag_url": "/images/flags/Словения797860d4-6372-4097-9f6a-8c3beb609fb1.png",
+    "name": "Словения",
+    "updatedAt": {"$date": "2025-11-14T20:23:39.841Z"}
+  },
+  {
+    "_id": {"$oid": "67d6efae028afbb5329b047b"},
+    "__v": 0,
+    "createdAt": {"$date": "2025-03-16T15:35:10.962Z"},
+    "flag_url": "/images/flags/Индия13aec2f5-8bbd-4f27-ad8a-b86c87ec8f06.png",
+    "name": "Индия",
+    "updatedAt": {"$date": "2025-12-01T21:10:35.281Z"}
+  },
+  {
+    "_id": {"$oid": "67d6f06d028afbb5329b06cf"},
+    "__v": 0,
+    "createdAt": {"$date": "2025-03-16T15:38:21.744Z"},
+    "flag_url": "/images/flags/Индонезияd351bc40-5a8c-4e6f-9fc4-534bf8f20309.png",
+    "name": "Индонезия",
+    "updatedAt": {"$date": "2025-10-25T09:55:53.749Z"}
+  },
+  {
+    "_id": {"$oid": "67d6f0b0028afbb5329b0767"},
+    "__v": 0,
+    "createdAt": {"$date": "2025-03-16T15:39:28.587Z"},
+    "flag_url": "/images/flags/Камбоджа407b8c01-2672-4cac-bdb6-f8c72e1a8210.png",
+    "name": "Камбоджа",
+    "updatedAt": {"$date": "2025-10-25T09:46:51.994Z"}
+  },
+  {
+    "_id": {"$oid": "67d6f191028afbb5329b090c"},
+    "__v": 0,
+    "createdAt": {"$date": "2025-03-16T15:43:13.808Z"},
+    "flag_url": "/images/flags/Шри-Ланка6955d425-da3b-41cb-8b42-a78b14ec1138.png",
+    "name": "Шри-Ланка",
+    "updatedAt": {"$date": "2025-10-25T09:26:07.687Z"}
+  },
+  {
+    "_id": {"$oid": "67d6f227028afbb5329b0aa8"},
+    "__v": 0,
+    "createdAt": {"$date": "2025-03-16T15:45:43.189Z"},
+    "flag_url": "/images/flags/Южная Корея6a4e2485-e923-4198-982f-e2b7a3322dec.png",
+    "name": "Южная Корея",
+    "updatedAt": {"$date": "2025-10-25T08:28:39.367Z"}
+  },
+  {
+    "_id": {"$oid": "67d6f290028afbb5329b0bb1"},
+    "__v": 0,
+    "createdAt": {"$date": "2025-03-16T15:47:28.618Z"},
+    "flag_url": "/images/flags/Непал15bb7394-478b-4c9c-b249-c8ea87f74748.png",
+    "name": "Непал",
+    "updatedAt": {"$date": "2025-10-25T09:42:38.458Z"}
+  },
+  {
+    "_id": {"$oid": "67da8c774fbd00b2ab13769e"},
+    "__v": 0,
+    "createdAt": {"$date": "2025-03-19T09:20:55.908Z"},
+    "flag_url": "/images/flags/Катарa49aa837-729a-4856-be1e-d97eeefdd3d5.png",
+    "name": "Катар",
+    "updatedAt": {"$date": "2025-10-25T09:46:19.645Z"}
+  },
+  {
+    "_id": {"$oid": "67da8caa4fbd00b2ab137700"},
+    "__v": 0,
+    "createdAt": {"$date": "2025-03-19T09:21:46.728Z"},
+    "flag_url": "/images/flags/Кувейтfbde33e9-fe2a-46e2-b306-64efbeabbd7d.png",
+    "name": "Кувейт",
+    "updatedAt": {"$date": "2025-10-25T09:44:47.697Z"}
+  },
+  {
+    "_id": {"$oid": "67da8cd74fbd00b2ab13777d"},
+    "__v": 0,
+    "createdAt": {"$date": "2025-03-19T09:22:31.533Z"},
+    "flag_url": "/images/flags/Саудовская Аравияdca57822-c59f-4d42-b642-de6f454882b1.png",
+    "name": "Саудовская Аравия",
+    "updatedAt": {"$date": "2025-10-25T09:35:35.116Z"}
+  },
+  {
+    "_id": {"$oid": "67da8cfc4fbd00b2ab1377de"},
+    "__v": 0,
+    "createdAt": {"$date": "2025-03-19T09:23:08.600Z"},
+    "flag_url": "/images/flags/Филиппиныff97681a-4525-40bd-a33c-ca75ade90ddc.png",
+    "name": "Филиппины",
+    "updatedAt": {"$date": "2025-10-25T09:31:28.935Z"}
+  },
+  {
+    "_id": {"$oid": "67da8d744fbd00b2ab1378cf"},
+    "__v": 0,
+    "createdAt": {"$date": "2025-03-19T09:25:08.848Z"},
+    "flag_url": "/images/flags/Малайзияaf7a85c1-07e5-4dad-a0b3-e26cbb87df13.png",
+    "name": "Малайзия",
+    "updatedAt": {"$date": "2025-10-25T09:43:08.204Z"}
+  },
+  {
+    "_id": {"$oid": "67da8db64fbd00b2ab13795e"},
+    "__v": 0,
+    "createdAt": {"$date": "2025-03-19T09:26:14.765Z"},
+    "flag_url": "/images/flags/Пакистанd2cfd93e-8f92-4aec-ac82-23553af7a237.png",
+    "name": "Пакистан",
+    "updatedAt": {"$date": "2025-10-25T09:40:18.180Z"}
+  },
+  {
+    "_id": {"$oid": "67e2ba4fa485d16b7ed840cc"},
+    "__v": 0,
+    "createdAt": {"$date": "2025-03-25T14:14:39.105Z"},
+    "flag_url": "/images/flags/Удалёнка (не трогать)dc8cd221-5cda-4c49-9d64-6f2688affa9f.png",
+    "name": "Удалёнка",
+    "updatedAt": {"$date": "2025-03-25T14:15:58.939Z"}
+  },
+  {
+    "_id": {"$oid": "685c5f5eca3334cd8d72de25"},
+    "__v": 0,
+    "createdAt": {"$date": "2025-06-25T20:43:10.736Z"},
+    "flag_url": "/images/flags/Финляндия9cf59675-d993-4ac8-b977-7b981a19424a.png",
+    "name": "Финляндия",
+    "updatedAt": {"$date": "2025-11-14T20:22:02.835Z"}
+  },
+  {
+    "_id": {"$oid": "68cd44482afd2c36182da2c0"},
+    "__v": 0,
+    "createdAt": {"$date": "2025-09-19T11:53:44.475Z"},
+    "flag_url": "/images/flags/Армения01d2b93e-c489-4f72-afb8-70b85b8bf85a.png",
+    "name": "Армения",
+    "updatedAt": {"$date": "2025-09-20T06:36:00.891Z"}
+  },
+  {
+    "_id": {"$oid": "68cd44572afd2c36182da2ef"},
+    "__v": 0,
+    "createdAt": {"$date": "2025-09-19T11:53:59.232Z"},
+    "flag_url": "/images/flags/Казахстанfeb856bb-2967-4496-a808-b0a9678059c0.png",
+    "name": "Казахстан",
+    "updatedAt": {"$date": "2025-09-20T07:19:02.935Z"}
+  }
+]

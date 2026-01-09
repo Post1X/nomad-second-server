@@ -4,6 +4,9 @@ import { OPERATION_STATUSES, OPERATION_TYPES } from '../helpers/constants';
 import parseFienta from '../operations/parseFienta';
 import parseEventim from '../operations/parseEventim';
 import parseKontramarka from '../operations/parseKontramarka';
+import { createLoggerWithSource } from '../helpers/logger';
+
+const logger = createLoggerWithSource('PARSING_CONTROLLER');
 
 class ParsingController {
   // POST /parsing/create
@@ -11,7 +14,6 @@ class ParsingController {
     try {
       const { type, meta } = req.body;
 
-      // Валидация типа парсера
       if (!Object.values(OPERATION_TYPES).includes(type)) {
         return res.status(400).json({
           status: 'error',
@@ -19,7 +21,6 @@ class ParsingController {
         });
       }
 
-      // Создание записи операции
       const operation = new OperationsSchema({
         type,
         status: OPERATION_STATUSES.pending,
@@ -30,7 +31,6 @@ class ParsingController {
       });
       await operation.save();
 
-      // Запуск скрипта парсинга в фоне (async, не блокируя ответ)
       setImmediate(async () => {
         try {
           await OperationsSchema.findByIdAndUpdate(operation._id, {
@@ -56,7 +56,7 @@ class ParsingController {
           await parseFunction({ meta, operationId: operation._id });
 
         } catch (error) {
-          console.error(`Error in parsing operation ${operation._id}:`, error);
+          logger.error(`Error in parsing operation ${operation._id}: ${error.message || error}`);
           await OperationsSchema.findByIdAndUpdate(operation._id, {
             status: OPERATION_STATUSES.error,
             errorText: error.message || 'Unknown error occurred',
@@ -80,7 +80,6 @@ class ParsingController {
     try {
       const { operationId } = req.params;
 
-      // Поиск операции
       const operation = await OperationsSchema.findById(operationId);
       if (!operation) {
         return res.status(404).json({
@@ -89,12 +88,10 @@ class ParsingController {
         });
       }
 
-      // Поиск всех событий для данной операции
       const parsedEvents = await ParsedEventsSchema.find({ operation: operationId })
         .sort({ batch_number: 1 })
         .lean();
 
-      // Преобразование event_data в массив событий
       const events = parsedEvents.map(pe => pe.event_data);
 
       res.json({
@@ -120,7 +117,6 @@ class ParsingController {
   // GET /parsing/unprocessed
   static getUnprocessed = async (req, res, next) => {
     try {
-      // Поиск всех операций со статусом success и is_processed: false
       const operations = await OperationsSchema.find({
         status: OPERATION_STATUSES.success,
         is_processed: false,
@@ -160,6 +156,108 @@ class ParsingController {
     }
   };
 
+  // GET /parsing/operations
+  static getOperations = async (req, res, next) => {
+    try {
+      const {
+        type,
+        limit,
+        skip,
+        includeEvents = 'false',
+      } = req.query;
+
+      const filter = {
+        is_taken: { $ne: true },
+      };
+
+      if (!type) {
+        return res.status(400).json({
+          status: 'error',
+          message: 'Parameter "type" is required',
+        });
+      }
+
+      filter.type = type;
+
+      let query = OperationsSchema.find(filter).sort({ createdAt: -1       });
+
+      const hasPagination = limit !== undefined || skip !== undefined;
+      
+      if (hasPagination) {
+        const limitValue = limit ? parseInt(limit, 10) : undefined;
+        const skipValue = skip ? parseInt(skip, 10) : 0;
+        
+        if (limitValue) {
+          query = query.limit(limitValue);
+        }
+        if (skipValue) {
+          query = query.skip(skipValue);
+        }
+      }
+
+      const operations = await query.lean();
+      const total = await OperationsSchema.countDocuments(filter);
+
+      const result = [];
+      const operationIds = [];
+
+      const shouldIncludeEvents = includeEvents === 'true';
+
+      for (const operation of operations) {
+        operationIds.push(operation._id);
+
+        const operationData = {
+          _id: operation._id,
+          type: operation.type,
+          status: operation.status,
+          statistics: operation.statistics,
+          errorText: operation.errorText,
+          infoText: operation.infoText,
+          createdAt: operation.createdAt,
+          updatedAt: operation.updatedAt,
+          finish_time: operation.finish_time,
+          is_processed: operation.is_processed,
+          is_taken: operation.is_taken,
+        };
+
+        if (shouldIncludeEvents) {
+          const parsedEvents = await ParsedEventsSchema.find({ operation: operation._id })
+            .sort({ batch_number: 1 })
+            .lean();
+
+          const events = parsedEvents.map(pe => pe.event_data);
+
+          operationData.events = events;
+          operationData.totalEvents = events.length;
+        }
+
+        result.push(operationData);
+      }
+
+      if (operationIds.length > 0) {
+        await OperationsSchema.updateMany(
+          { _id: { $in: operationIds } },
+          { $set: { is_taken: true } }
+        );
+      }
+
+      const response = {
+        status: 'ok',
+        operations: result,
+        total,
+      };
+
+      if (hasPagination) {
+        response.limit = limit ? parseInt(limit, 10) : undefined;
+        response.skip = skip ? parseInt(skip, 10) : 0;
+      }
+
+      res.json(response);
+    } catch (error) {
+      next(error);
+    }
+  };
+
   // POST /parsing/cleanup
   static cleanup = async (req, res, next) => {
     try {
@@ -168,7 +266,6 @@ class ParsingController {
       const cutoffDate = new Date();
       cutoffDate.setDate(cutoffDate.getDate() - days);
 
-      // Удаление ParsedEventsSchema старше N дней для обработанных операций
       const processedOperations = await OperationsSchema.find({
         status: OPERATION_STATUSES.success,
         is_processed: true,

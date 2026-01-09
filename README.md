@@ -7,7 +7,7 @@
 **Подробная инструкция по установке:** см. [INSTALLATION.md](./INSTALLATION.md)
 
 ### Минимальные требования:
-- Node.js 16.x+ (рекомендуется 18.x LTS)
+- Node.js 22.20.0 (требуется именно эта версия)
 - MongoDB 4.4+
 - Системные зависимости для Puppeteer (см. INSTALLATION.md)
 
@@ -112,6 +112,52 @@ yarn prod
 }
 ```
 
+### GET /parsing/operations
+Возвращает список операций указанного типа, которые еще не были взяты (is_taken: false). После запроса все возвращенные операции помечаются как is_taken: true и больше не будут возвращаться.
+
+**Query параметры:**
+- `type` (обязательно) - тип операции (parsingEventsFromFienta, parsingEventsFromEventim, parsingEventsFromKontramarka)
+- `limit` (опционально) - количество операций на странице. Если не указан, возвращаются все операции
+- `skip` (опционально) - количество операций для пропуска (пагинация). Если не указан, начинается с 0
+- `includeEvents` (опционально, по умолчанию false) - включить мероприятия в ответ (true/false)
+
+**Важно:**
+- Операции с `is_taken: true` не возвращаются
+- После каждого запроса все возвращенные операции автоматически помечаются как `is_taken: true`
+- Если `limit` и `skip` не указаны, возвращаются все доступные операции
+
+**Пример запроса:**
+```
+GET /parsing/operations?type=parsingEventsFromFienta&limit=20&skip=0&includeEvents=true
+```
+
+**Ответ:**
+```json
+{
+  "status": "ok",
+  "operations": [
+    {
+      "_id": "...",
+      "type": "parsingEventsFromFienta",
+      "status": "success",
+      "statistics": "...",
+      "errorText": "",
+      "infoText": "...",
+      "createdAt": "2026-01-09T11:00:00.000Z",
+      "updatedAt": "2026-01-09T11:05:00.000Z",
+      "finish_time": "2026-01-09T11:05:00.000Z",
+      "is_processed": false,
+      "is_taken": false,
+      "events": [...],  // только если includeEvents=true
+      "totalEvents": 150  // только если includeEvents=true
+    }
+  ],
+  "total": 25,
+  "limit": 20,  // только если указан limit
+  "skip": 0     // только если указан skip
+}
+```
+
 ### POST /parsing/cleanup
 Очищает старые данные (ParsedEventsSchema).
 
@@ -137,4 +183,20 @@ yarn prod
 - Прогресс парсинга сохраняется в `infoText` после каждого батча
 - Если скрипт упадет - уже сохраненные батчи останутся в БД
 - Операции имеют статусы: `pending`, `processing`, `success`, `error`
+
+## Автоматический парсинг (Cron Jobs)
+
+Сервер автоматически запускает парсинг по расписанию:
+
+- **Понедельник 02:00 UTC (05:00 MSK)** - Kontramarka
+- **Среда 02:00 UTC (05:00 MSK)** - Fienta
+- **Пятница 02:00 UTC (05:00 MSK)** - Eventim
+
+Кроны создают операции автоматически и запускают парсинг. Города загружаются из БД второго сервера (нужно загрузить дамп городов из основного сервера).
+
+## Синхронизация данных
+
+- **Города**: Загрузите дамп коллекции `Cities` из основного сервера в БД второго сервера
+- **Формат городов**: `{country_id, name: "Русский | English", sort, coordinates: {lat: String, lon: String}}`
+- Парсеры автоматически извлекают английское название из формата "Русский | English"
 

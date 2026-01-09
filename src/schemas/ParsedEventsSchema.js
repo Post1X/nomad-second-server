@@ -19,7 +19,6 @@ const ParsedEventsSchema = new mongoose.Schema({
   timestamps: true,
 });
 
-// Составной индекс для оптимизации выборки
 ParsedEventsSchema.index({ operation: 1, batch_number: 1 });
 
 const ParsedEvents = mongoose.model('ParsedEvents', ParsedEventsSchema);

@@ -4,12 +4,12 @@ import authApiKey from '../middlewares/authApiKey';
 
 const router = express.Router();
 
-// Все эндпоинты требуют API key
 router.use(authApiKey);
 
 router.post('/create', ParsingController.create);
 router.get('/results/:operationId', ParsingController.getResults);
 router.get('/unprocessed', ParsingController.getUnprocessed);
+router.get('/operations', ParsingController.getOperations);
 router.post('/cleanup', ParsingController.cleanup);
 
 export default router;

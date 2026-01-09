@@ -1,24 +1,34 @@
-import mongoose, { Schema } from 'mongoose';
+import mongoose from 'mongoose';
 
-// Упрощенная схема для городов (используется только для поиска)
-// Основные данные городов приходят в meta.cities
-const CitiesSchema = new mongoose.Schema({
-  name: {
-    type: String,
-    required: true,
+const Cities = new mongoose.Schema(
+  {
+    country_id: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'Countries',
+    },
+    name: {
+      type: String,
+      required: true,
+    },
+    sort: {
+      type: Number,
+      default: 999,
+    },
+    coordinates: {
+      lat: {
+        type: String,
+        required: true,
+      },
+      lon: {
+        type: String,
+        required: true,
+      },
+    },
   },
-  country_id: {
-    type: Schema.Types.ObjectId,
-    ref: 'Countries',
-  },
-  coordinates: {
-    type: Schema.Types.Mixed,
-  },
-}, {
-  timestamps: true,
-});
+  { timestamps: true },
+);
 
-const Cities = mongoose.model('Cities', CitiesSchema);
+const CitiesSchema = mongoose.model('Cities', Cities);
 
-export default Cities;
+export default CitiesSchema;
 

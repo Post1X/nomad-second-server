@@ -7,6 +7,10 @@ import cors from 'cors';
 import indexRouter from './routes';
 import mongooseConnect from './helpers/mongooseConnect';
 import { MAX_FIELDS_SIZE_MB } from './helpers/constants';
+import setupCron from './helpers/cron';
+import { createLoggerWithSource } from './helpers/logger';
+
+const logger = createLoggerWithSource('APP');
 
 const app = express();
 
@@ -24,7 +28,8 @@ app.use(express.urlencoded({ extended: true, limit: `${MAX_FIELDS_SIZE_MB}mb` })
 app.use(cookieParser());
 
 mongooseConnect(() => {
-  console.log('Server initialized');
+  logger.info('Server initialized');
+  setupCron();
 });
 
 app.use('/', indexRouter);
