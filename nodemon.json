@@ -1,0 +1,7 @@
+{
+  "watch": ["src"],
+  "ext": "js,json",
+  "ignore": ["src/**/*.test.js", "node_modules"],
+  "exec": "babel-node -r dotenv/config src/bin/www"
+}
+
