@@ -8,4 +8,5 @@ logs/
 eventim.json
 eventim.json.gz
 *.nml
+tmp/
 

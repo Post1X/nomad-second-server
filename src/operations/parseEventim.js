@@ -138,6 +138,10 @@ const downloadFile = async (url, destPath, password = null, username = null) => 
 const extractGz = async (gzPath, extractPath) => {
   return new Promise((resolve, reject) => {
     try {
+      if (!fs.existsSync(gzPath)) {
+        return reject(new Error(`Archive file not found: ${gzPath}`));
+      }
+
       const gzFileName = path.basename(gzPath);
       let fileName = path.basename(gzPath, '.gz');
       
@@ -155,17 +159,37 @@ const extractGz = async (gzPath, extractPath) => {
       const writeStream = fs.createWriteStream(outputPath);
       const gunzip = createGunzip();
       
+      let hasError = false;
+      
+      const handleError = (err, source) => {
+        if (hasError) return;
+        hasError = true;
+        readStream.destroy();
+        writeStream.destroy();
+        if (fs.existsSync(outputPath)) {
+          try {
+            fs.unlinkSync(outputPath);
+          } catch (unlinkErr) {
+            // Ignore unlink errors
+          }
+        }
+        reject(new Error(`Failed to extract gz (${source}): ${err.message || err}`));
+      };
+      
+      readStream.on('error', (err) => handleError(err, 'readStream'));
+      gunzip.on('error', (err) => handleError(err, 'gunzip'));
+      writeStream.on('error', (err) => handleError(err, 'writeStream'));
+      
       readStream
         .pipe(gunzip)
         .pipe(writeStream)
         .on('finish', () => {
-          resolve(outputPath);
-        })
-        .on('error', (err) => {
-          reject(new Error(`Failed to extract gz: ${err.message}`));
+          if (!hasError) {
+            resolve(outputPath);
+          }
         });
     } catch (e) {
-      reject(new Error(`Failed to extract gz: ${e.message}`));
+      reject(new Error(`Failed to extract gz: ${e.message || e}`));
     }
   });
 };
@@ -202,8 +226,15 @@ async function parseEventim({ meta, operationId }) {
 
     let raw;
     let extractedPath = null;
-    const rawPath = path.join(__dirname, 'eventim.json');
-    const extractPath = __dirname;
+    // Используем папку tmp в корне проекта, чтобы nodemon не перезапускал сервер
+    const tmpDir = path.join(process.cwd(), 'tmp');
+    if (!fs.existsSync(tmpDir)) {
+      fs.mkdirSync(tmpDir, { recursive: true });
+      await logProgress(operationId, `Created tmp directory: ${tmpDir}`);
+    }
+    await logProgress(operationId, `Using tmp directory: ${tmpDir}`);
+    const rawPath = path.join(tmpDir, 'eventim.json');
+    const extractPath = tmpDir;
     const eventimUrlDefault = process.env.EVENTIM_URL;
     const eventimPassword = process.env.EVENTIM_PASSWORD || '';
     const eventimUsername = process.env.EVENTIM_USERNAME || '';
@@ -213,16 +244,22 @@ async function parseEventim({ meta, operationId }) {
       await logProgress(operationId, `Downloading Eventim file from ${urlToUse}...`);
       const urlObj = new URL(urlToUse);
       const urlFileName = path.basename(urlObj.pathname) || 'eventim.json.gz';
-      const gzPath = path.join(__dirname, urlFileName);
+      const gzPath = path.join(tmpDir, urlFileName);
+      await logProgress(operationId, `Will save archive to: ${gzPath}`);
       
       await downloadFile(urlToUse, gzPath, eventimPassword, eventimUsername);
+      await logProgress(operationId, `Archive downloaded to: ${gzPath}`);
+      
       await logProgress(operationId, 'Extracting archive...');
       extractedPath = await extractGz(gzPath, extractPath);
+      await logProgress(operationId, `Archive extracted to: ${extractedPath}`);
+      
       if (fs.existsSync(gzPath)) {
         fs.unlinkSync(gzPath);
       }
 
       const extractedFileName = path.basename(extractedPath);
+      await logProgress(operationId, `Reading extracted file: ${extractedFileName}`);
 
       if (extractedFileName.endsWith('.nml')) {
         const nmlContent = fs.readFileSync(extractedPath, 'utf8');
@@ -231,30 +268,61 @@ async function parseEventim({ meta, operationId }) {
           raw = JSON.stringify(parsed);
         } catch (e) {
           errorTexts.push(`NML file is not valid JSON, trying to parse as XML: ${e.message}`);
+          logger.error(`NML file is not valid JSON: ${e.message}`);
           throw new Error('NML file parsing not implemented yet');
         }
       } else if (extractedFileName.endsWith('.json')) {
         raw = fs.readFileSync(extractedPath, 'utf8');
+        await logProgress(operationId, `File read successfully, size: ${raw.length} bytes`);
       } else if (fs.existsSync(rawPath)) {
         raw = fs.readFileSync(rawPath, 'utf8');
         errorTexts.push('Using cached eventim.json file');
+        await logProgress(operationId, 'Using cached eventim.json file');
       } else {
-        throw new Error('No NML or JSON file found in extracted archive');
+        const errMsg = `No NML or JSON file found in extracted archive. Extracted file: ${extractedFileName}`;
+        logger.error(errMsg);
+        throw new Error(errMsg);
       }
       await logProgress(operationId, 'File downloaded and extracted successfully');
     } catch (downloadErr) {
-      errorTexts.push(`Failed to download/extract Eventim file: ${downloadErr.message}`);
+      const errMsg = downloadErr?.message || downloadErr?.toString() || 'Unknown download error';
+      errorTexts.push(`Failed to download/extract Eventim file: ${errMsg}`);
+      logger.error(`Eventim download/extract error: ${errMsg}`, downloadErr);
+      await logProgress(operationId, `ERROR during download/extract: ${errMsg}`);
+      
       if (fs.existsSync(rawPath)) {
         raw = fs.readFileSync(rawPath, 'utf8');
         errorTexts.push('Using cached eventim.json file as fallback');
         await logProgress(operationId, 'Using cached file as fallback');
       } else {
+        logger.error(`FATAL: No cached file available. Error: ${errMsg}`);
+        await logProgress(operationId, `FATAL: No cached file available. Error: ${errMsg}`);
         throw downloadErr;
       }
     }
 
+    if (!raw) {
+      const errMsg = 'No data available to parse (raw is empty)';
+      errorTexts.push(errMsg);
+      logger.error(errMsg);
+      await logProgress(operationId, `FATAL ERROR: ${errMsg}`);
+      throw new Error(errMsg);
+    }
+
     await logProgress(operationId, 'Parsing Eventim data...');
-    const { eventserie = [] } = JSON.parse(raw);
+    let parsedData;
+    try {
+      parsedData = JSON.parse(raw);
+    } catch (parseErr) {
+      const errMsg = `Failed to parse JSON: ${parseErr?.message || parseErr}`;
+      errorTexts.push(errMsg);
+      logger.error(errMsg, parseErr);
+      await logProgress(operationId, `FATAL ERROR: ${errMsg}`);
+      throw new Error(errMsg);
+    }
+    
+    const { eventserie = [] } = parsedData;
+    await logProgress(operationId, `Found ${eventserie.length} event series to process`);
 
     for (const series of eventserie) {
       const photoUrl = series.esPictureBig || series.esPicture || series.esPictureSmall || null;
@@ -314,11 +382,6 @@ async function parseEventim({ meta, operationId }) {
       }
     }
 
-    if (events.length > 5) {
-      events.splice(5);
-      errorTexts.push(`Limited to 5 events for testing (total parsed: ${events.length})`);
-    }
-
     if (extractedPath && fs.existsSync(extractedPath)) {
       try {
         fs.unlinkSync(extractedPath);
@@ -331,6 +394,7 @@ async function parseEventim({ meta, operationId }) {
   } catch (e) {
     const errMsg = e?.message || 'Unknown error while parsing Eventim';
     errorTexts.push(errMsg);
+    logger.error(`FATAL ERROR: ${errMsg}`, e);
     await logProgress(operationId, `FATAL ERROR: ${errMsg}`);
   }
 
@@ -365,6 +429,7 @@ async function parseEventim({ meta, operationId }) {
       errorText: errorTexts.join('\n'),
     });
   } catch (error) {
+    logger.error(`Error saving events to database: ${error.message || error}`, error);
     await OperationsSchema.findByIdAndUpdate(operationId, {
       status: 'error',
       errorText: error.message || 'Unknown error while saving events',

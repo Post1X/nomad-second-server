@@ -294,6 +294,7 @@ class ParsingController {
       next(error);
     }
   };
+
 }
 
 export default ParsingController;

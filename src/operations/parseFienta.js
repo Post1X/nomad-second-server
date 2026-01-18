@@ -277,13 +277,6 @@ async function parseFienta({ meta, operationId }) {
         await page.close();
         await logProgress(operationId, `Found ${eventLinks.length} events for ${city.name}`);
 
-        const totalFound = eventLinks.length;
-        if (eventLinks.length > 5) {
-          eventLinks.splice(5);
-          errorTexts.push(`Limited to 5 events for testing (total found: ${totalFound})`);
-          await logProgress(operationId, `Limited to 5 events for testing (total found: ${totalFound})`);
-        }
-
         for (const link of eventLinks) {
           await logProgress(operationId, `Processing event: ${link}`);
           const p = await browser.newPage();
@@ -385,11 +378,6 @@ async function parseFienta({ meta, operationId }) {
       await logProgress(operationId, 'Browser closed');
     }
     await logProgress(operationId, `Parsing completed. Total: ${events.length} events parsed`);
-  }
-
-  if (events.length > 5) {
-    events.splice(5);
-    errorTexts.push(`Limited to 5 events for testing (total parsed: ${events.length})`);
   }
 
   const BATCH_SIZE = 10;

@@ -272,11 +272,6 @@ async function parseKontramarka({ meta, operationId }) {
     await browser.close();
     await logProgress(operationId, 'Browser closed');
 
-    if (allEvents.length > 5) {
-      allEvents.splice(5);
-      errorTexts.push(`Limited to 5 events for testing (total parsed: ${allEvents.length})`);
-    }
-
     await logProgress(operationId, `Parsing completed. Total: ${allEvents.length} events parsed`);
   } catch (e) {
     const errMsg = e?.message || 'Unknown error while parsing Kontramarka';
