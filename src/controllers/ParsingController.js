@@ -1,5 +1,7 @@
 import OperationsSchema from '../schemas/OperationsSchema';
 import ParsedEventsSchema from '../schemas/ParsedEventsSchema';
+import CitiesSchema from '../schemas/CitiesSchema';
+import CountriesSchema from '../schemas/CountriesSchema';
 import { OPERATION_STATUSES, OPERATION_TYPES } from '../helpers/constants';
 import parseFienta from '../operations/parseFienta';
 import parseEventim from '../operations/parseEventim';
@@ -108,48 +110,6 @@ class ParsingController {
         },
         events,
         totalEvents: events.length,
-      });
-    } catch (error) {
-      next(error);
-    }
-  };
-
-  // GET /parsing/unprocessed
-  static getUnprocessed = async (req, res, next) => {
-    try {
-      const operations = await OperationsSchema.find({
-        status: OPERATION_STATUSES.success,
-        is_processed: false,
-      }).sort({ createdAt: -1 });
-
-      const result = [];
-
-      for (const operation of operations) {
-        const parsedEvents = await ParsedEventsSchema.find({ operation: operation._id })
-          .sort({ batch_number: 1 })
-          .lean();
-
-        const events = parsedEvents.map(pe => pe.event_data);
-
-        result.push({
-          operation: {
-            _id: operation._id,
-            type: operation.type,
-            status: operation.status,
-            statistics: operation.statistics,
-            errorText: operation.errorText,
-            infoText: operation.infoText,
-            createdAt: operation.createdAt,
-            finish_time: operation.finish_time,
-          },
-          events,
-          totalEvents: events.length,
-        });
-      }
-
-      res.json({
-        status: 'ok',
-        operations: result,
       });
     } catch (error) {
       next(error);
@@ -291,6 +251,149 @@ class ParsingController {
         message: 'Cleanup completed',
       });
     } catch (error) {
+      next(error);
+    }
+  };
+
+  // POST /parsing/sync-cities-countries
+  static syncCitiesAndCountries = async (req, res, next) => {
+    try {
+      const { countries = [], cities = [], replaceAll = false } = req.body;
+
+      if (!Array.isArray(countries) || !Array.isArray(cities)) {
+        return res.status(400).json({
+          status: 'error',
+          message: 'countries and cities must be arrays',
+        });
+      }
+
+      let countriesCreated = 0;
+      let citiesCreated = 0;
+      let countriesDeleted = 0;
+      let citiesDeleted = 0;
+
+      // Обработка стран
+      if (replaceAll) {
+        // Удаляем все существующие страны
+        const deleteCountriesResult = await CountriesSchema.deleteMany({});
+        countriesDeleted = deleteCountriesResult.deletedCount;
+        logger.info(`Deleted ${countriesDeleted} countries`);
+
+        // Создаем новые страны
+        if (countries.length > 0) {
+          const countriesToInsert = countries.map(country => ({
+            _id: country._id,
+            name: country.name,
+            flag_url: country.flag_url || '',
+          }));
+          await CountriesSchema.insertMany(countriesToInsert, { ordered: false }).catch(err => {
+            // Игнорируем ошибки дубликатов при вставке
+            if (err.code !== 11000) throw err;
+          });
+          countriesCreated = countries.length;
+          logger.info(`Created ${countriesCreated} countries`);
+        }
+      } else {
+        // Создаем только новые страны (по _id)
+        if (countries.length > 0) {
+          const existingCountryIds = await CountriesSchema.find({})
+            .select('_id')
+            .lean();
+          const existingIdsSet = new Set(
+            existingCountryIds.map(c => c._id.toString())
+          );
+
+          const newCountries = countries.filter(
+            country => !existingIdsSet.has(country._id.toString())
+          );
+
+          if (newCountries.length > 0) {
+            const countriesToInsert = newCountries.map(country => ({
+              _id: country._id,
+              name: country.name,
+              flag_url: country.flag_url || '',
+            }));
+            await CountriesSchema.insertMany(countriesToInsert, { ordered: false }).catch(err => {
+              // Игнорируем ошибки дубликатов при вставке
+              if (err.code !== 11000) throw err;
+            });
+            countriesCreated = newCountries.length;
+            logger.info(`Created ${countriesCreated} new countries`);
+          }
+        }
+      }
+
+      // Обработка городов
+      if (replaceAll) {
+        // Удаляем все существующие города
+        const deleteCitiesResult = await CitiesSchema.deleteMany({});
+        citiesDeleted = deleteCitiesResult.deletedCount;
+        logger.info(`Deleted ${citiesDeleted} cities`);
+
+        // Создаем новые города
+        if (cities.length > 0) {
+          const citiesToInsert = cities.map(city => ({
+            _id: city._id,
+            country_id: city.country_id,
+            name: city.name,
+            sort: city.sort || 999,
+            coordinates: city.coordinates || { lat: '0', lon: '0' },
+          }));
+          await CitiesSchema.insertMany(citiesToInsert, { ordered: false }).catch(err => {
+            // Игнорируем ошибки дубликатов при вставке
+            if (err.code !== 11000) throw err;
+          });
+          citiesCreated = cities.length;
+          logger.info(`Created ${citiesCreated} cities`);
+        }
+      } else {
+        // Создаем только новые города (по _id)
+        if (cities.length > 0) {
+          const existingCityIds = await CitiesSchema.find({})
+            .select('_id')
+            .lean();
+          const existingIdsSet = new Set(
+            existingCityIds.map(c => c._id.toString())
+          );
+
+          const newCities = cities.filter(
+            city => !existingIdsSet.has(city._id.toString())
+          );
+
+          if (newCities.length > 0) {
+            const citiesToInsert = newCities.map(city => ({
+              _id: city._id,
+              country_id: city.country_id,
+              name: city.name,
+              sort: city.sort || 999,
+              coordinates: city.coordinates || { lat: '0', lon: '0' },
+            }));
+            await CitiesSchema.insertMany(citiesToInsert, { ordered: false }).catch(err => {
+              // Игнорируем ошибки дубликатов при вставке
+              if (err.code !== 11000) throw err;
+            });
+            citiesCreated = newCities.length;
+            logger.info(`Created ${citiesCreated} new cities`);
+          }
+        }
+      }
+
+      res.json({
+        status: 'ok',
+        message: 'Sync completed',
+        statistics: {
+          countries: {
+            created: countriesCreated,
+            deleted: countriesDeleted,
+          },
+          cities: {
+            created: citiesCreated,
+            deleted: citiesDeleted,
+          },
+        },
+      });
+    } catch (error) {
+      logger.error(`Error syncing cities and countries: ${error.message || error}`);
       next(error);
     }
   };

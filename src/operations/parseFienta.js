@@ -203,6 +203,7 @@ const logProgress = async (operationId, message) => {
 async function parseFienta({ meta, operationId }) {
   const events = [];
   const errorTexts = [];
+  const infoTexts = [];
 
   const {
     adminId, countryId, cityId, cityName, specialization = 'Event', maxCities,
@@ -223,8 +224,9 @@ async function parseFienta({ meta, operationId }) {
     }
     
     if (cities.length === 0) {
-      errorTexts.push(`City not found: ${cityName || cityId}`);
-      await logProgress(operationId, `City not found: ${cityName || cityId}`);
+      const errorMsg = `City not found: ${cityName || cityId}`;
+      errorTexts.push(errorMsg);
+      await logProgress(operationId, `ERROR: ${errorMsg}`);
       await OperationsSchema.findByIdAndUpdate(operationId, {
         status: 'error',
         errorText: errorTexts.join('\n'),
@@ -308,7 +310,9 @@ async function parseFienta({ meta, operationId }) {
               const resolvedCountryId = countryId || matchedCity?.country_id || null;
 
               if (!resolvedCityId || !resolvedCountryId) {
-                errorTexts.push(`Skip event "${parsed.name}" – city/country id missing; pass meta.cityId/meta.countryId or ensure city exists in DB. [DEBUG targetCity="${targetCity}" matched="${matchedCity?.name || 'null'}" matchedCityId="${matchedCity?._id || '-'}" matchedCountryId="${matchedCity?.country_id || '-'}" providedCityId="${cityId || '-'}" providedCountryId="${countryId || '-'}"]`);
+                const skipMsg = `Skip event "${parsed.name}" – city/country id missing; pass meta.cityId/meta.countryId or ensure city exists in DB. [DEBUG targetCity="${targetCity}" matched="${matchedCity?.name || 'null'}" matchedCityId="${matchedCity?._id || '-'}" matchedCountryId="${matchedCity?.country_id || '-'}" providedCityId="${cityId || '-'}" providedCountryId="${countryId || '-'}"]`;
+                infoTexts.push(skipMsg);
+                await logProgress(operationId, `INFO: ${skipMsg}`);
                 skippedMissingIds += 1;
                 continue;
               }
@@ -358,13 +362,13 @@ async function parseFienta({ meta, operationId }) {
             }
           }
         }
-        await logProgress(operationId, `City ${city.name} completed: scraped ${scraped}, skipped ${skippedMissingIds}, added ${added}`);
+        const cityStats = `City ${city.name}: scraped ${scraped}, skippedMissingIds ${skippedMissingIds}, added ${added}`;
+        infoTexts.push(cityStats);
+        await logProgress(operationId, cityStats);
       } catch (e) {
         const errMsg = `Error for city ${city.name}: ${e?.message || e}`;
         errorTexts.push(errMsg);
         await logProgress(operationId, `ERROR: ${errMsg}`);
-      } finally {
-        errorTexts.push(`City ${city.name}: scraped ${scraped}, skippedMissingIds ${skippedMissingIds}, added ${added}`);
       }
     }
     await logProgress(operationId, 'All cities processed. Closing browser...');
@@ -400,6 +404,10 @@ async function parseFienta({ meta, operationId }) {
       });
     }
     
+    const operation = await OperationsSchema.findById(operationId);
+    const finalInfoText = operation?.infoText || '';
+    const additionalInfo = infoTexts.length > 0 ? `\n${infoTexts.join('\n')}` : '';
+    
     await OperationsSchema.findByIdAndUpdate(operationId, {
       status: 'success',
       finish_time: new Date(),
@@ -409,6 +417,7 @@ async function parseFienta({ meta, operationId }) {
         errors: errorTexts.length,
       }),
       errorText: errorTexts.join('\n'),
+      infoText: finalInfoText + additionalInfo,
     });
   } catch (error) {
     await OperationsSchema.findByIdAndUpdate(operationId, {

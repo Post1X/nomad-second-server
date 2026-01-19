@@ -95,23 +95,6 @@ yarn prod
 }
 ```
 
-### GET /parsing/unprocessed
-Возвращает массив всех необработанных операций (success, не прочитанные ранее).
-
-**Ответ:**
-```json
-{
-  "status": "ok",
-  "operations": [
-    {
-      "operation": { ... },
-      "events": [ ... ],
-      "totalEvents": 150
-    }
-  ]
-}
-```
-
 ### GET /parsing/operations
 Возвращает список операций указанного типа, которые еще не были взяты (is_taken: false). После запроса все возвращенные операции помечаются как is_taken: true и больше не будут возвращаться.
 
@@ -174,6 +157,58 @@ GET /parsing/operations?type=parsingEventsFromFienta&limit=20&skip=0&includeEven
   "status": "ok",
   "deletedCount": 1500,
   "message": "Cleanup completed"
+}
+```
+
+### POST /parsing/sync-cities-countries
+Синхронизирует страны и города с основного сервера.
+
+**Тело запроса:**
+```json
+{
+  "countries": [
+    {
+      "_id": "507f1f77bcf86cd799439011",
+      "name": "Россия",
+      "flag_url": "https://example.com/flag.png"
+    }
+  ],
+  "cities": [
+    {
+      "_id": "507f1f77bcf86cd799439012",
+      "country_id": "507f1f77bcf86cd799439011",
+      "name": "Москва | Moscow",
+      "sort": 1,
+      "coordinates": {
+        "lat": "55.7558",
+        "lon": "37.6173"
+      }
+    }
+  ],
+  "replaceAll": false
+}
+```
+
+**Параметры:**
+- `countries` (массив) - список стран для синхронизации
+- `cities` (массив) - список городов для синхронизации
+- `replaceAll` (boolean) - если `true`, удаляет все существующие записи и создает новые. Если `false`, создает только новые записи (проверка по `_id`)
+
+**Ответ:**
+```json
+{
+  "status": "ok",
+  "message": "Sync completed",
+  "statistics": {
+    "countries": {
+      "created": 5,
+      "deleted": 0
+    },
+    "cities": {
+      "created": 10,
+      "deleted": 0
+    }
+  }
 }
 ```
 

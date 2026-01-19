@@ -100,6 +100,7 @@ moment.locale('ru');
 async function parseKontramarka({ meta, operationId }) {
   const events = [];
   const errorTexts = [];
+  const infoTexts = [];
   let allEvents = [];
 
   try {
@@ -209,7 +210,9 @@ async function parseKontramarka({ meta, operationId }) {
 
               if (!resolvedCityId || !resolvedCountryId) {
                 skippedMissingIds += 1;
-                errorTexts.push(`Skip event "${card.title}" – city/country id is missing; provide meta.cityId/meta.countryId or add IDs to DB. [DEBUG targetCity="${slot.cityName || cityItem.name}" matched="${matchedCity?.name || 'null'}" matchedCityId="${matchedCity?._id || '-'}" matchedCountryId="${matchedCity?.country_id || '-'}" providedCityId="${cityId || '-'}" providedCountryId="${countryId || '-'}"]`);
+                const skipMsg = `Skip event "${card.title}" – city/country id is missing; provide meta.cityId/meta.countryId or add IDs to DB. [DEBUG targetCity="${slot.cityName || cityItem.name}" matched="${matchedCity?.name || 'null'}" matchedCityId="${matchedCity?._id || '-'}" matchedCountryId="${matchedCity?.country_id || '-'}" providedCityId="${cityId || '-'}" providedCountryId="${countryId || '-'}"]`;
+                infoTexts.push(skipMsg);
+                await logProgress(operationId, `INFO: ${skipMsg}`);
                 continue;
               }
 
@@ -248,19 +251,27 @@ async function parseKontramarka({ meta, operationId }) {
               cityEvents.push(newEvent);
             }
           } catch (detailErr) {
-            errorTexts.push(`Error opening tour ${tourUrl}: ${detailErr?.message || detailErr}`);
+            const errMsg = `Error opening tour ${tourUrl}: ${detailErr?.message || detailErr}`;
+            errorTexts.push(errMsg);
+            await logProgress(operationId, `ERROR: ${errMsg}`);
           } finally {
             await detail.close();
           }
         }
 
         if (!cards.length) {
-          errorTexts.push(`No events found on page for city ${cityItem.name} (${url})`);
+          const noEventsMsg = `No events found on page for city ${cityItem.name} (${url})`;
+          infoTexts.push(noEventsMsg);
+          await logProgress(operationId, `INFO: ${noEventsMsg}`);
         } else {
-          errorTexts.push(`City ${cityItem.name}: scraped ${scraped}, skippedMissingIds ${skippedMissingIds}, added ${cityEvents.length}`);
+          const cityStats = `City ${cityItem.name}: scraped ${scraped}, skippedMissingIds ${skippedMissingIds}, added ${cityEvents.length}`;
+          infoTexts.push(cityStats);
+          await logProgress(operationId, cityStats);
         }
       } catch (e) {
-        errorTexts.push(`Error for city ${cityItem.name}: ${e?.message || e}`);
+        const errMsg = `Error for city ${cityItem.name}: ${e?.message || e}`;
+        errorTexts.push(errMsg);
+        await logProgress(operationId, `ERROR: ${errMsg}`);
       } finally {
         await page.close();
       }
@@ -300,6 +311,10 @@ async function parseKontramarka({ meta, operationId }) {
       });
     }
     
+    const operation = await OperationsSchema.findById(operationId);
+    const finalInfoText = operation?.infoText || '';
+    const additionalInfo = infoTexts.length > 0 ? `\n${infoTexts.join('\n')}` : '';
+    
     await OperationsSchema.findByIdAndUpdate(operationId, {
       status: 'success',
       finish_time: new Date(),
@@ -309,6 +324,7 @@ async function parseKontramarka({ meta, operationId }) {
         errors: errorTexts.length,
       }),
       errorText: errorTexts.join('\n'),
+      infoText: finalInfoText + additionalInfo,
     });
   } catch (error) {
     await OperationsSchema.findByIdAndUpdate(operationId, {

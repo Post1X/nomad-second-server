@@ -213,6 +213,7 @@ const logProgress = async (operationId, message) => {
 async function parseEventim({ meta, operationId }) {
   const events = [];
   const errorTexts = [];
+  const infoTexts = [];
 
   try {
     const {
@@ -267,8 +268,9 @@ async function parseEventim({ meta, operationId }) {
           const parsed = JSON.parse(nmlContent);
           raw = JSON.stringify(parsed);
         } catch (e) {
-          errorTexts.push(`NML file is not valid JSON, trying to parse as XML: ${e.message}`);
-          logger.error(`NML file is not valid JSON: ${e.message}`);
+          const errMsg = `NML file is not valid JSON, trying to parse as XML: ${e.message}`;
+          errorTexts.push(errMsg);
+          logger.error(errMsg);
           throw new Error('NML file parsing not implemented yet');
         }
       } else if (extractedFileName.endsWith('.json')) {
@@ -276,8 +278,9 @@ async function parseEventim({ meta, operationId }) {
         await logProgress(operationId, `File read successfully, size: ${raw.length} bytes`);
       } else if (fs.existsSync(rawPath)) {
         raw = fs.readFileSync(rawPath, 'utf8');
-        errorTexts.push('Using cached eventim.json file');
-        await logProgress(operationId, 'Using cached eventim.json file');
+        const cacheMsg = 'Using cached eventim.json file';
+        infoTexts.push(cacheMsg);
+        await logProgress(operationId, cacheMsg);
       } else {
         const errMsg = `No NML or JSON file found in extracted archive. Extracted file: ${extractedFileName}`;
         logger.error(errMsg);
@@ -292,8 +295,9 @@ async function parseEventim({ meta, operationId }) {
       
       if (fs.existsSync(rawPath)) {
         raw = fs.readFileSync(rawPath, 'utf8');
-        errorTexts.push('Using cached eventim.json file as fallback');
-        await logProgress(operationId, 'Using cached file as fallback');
+        const fallbackMsg = 'Using cached eventim.json file as fallback';
+        infoTexts.push(fallbackMsg);
+        await logProgress(operationId, fallbackMsg);
       } else {
         logger.error(`FATAL: No cached file available. Error: ${errMsg}`);
         await logProgress(operationId, `FATAL: No cached file available. Error: ${errMsg}`);
@@ -344,7 +348,9 @@ async function parseEventim({ meta, operationId }) {
         const resolvedCountryId = countryId || matchedCity?.country_id || null;
 
         if (!resolvedCityId || !resolvedCountryId) {
-          errorTexts.push(`Skip event "${event.eventName || series.esName}" – city/country id missing; pass meta.cityId/meta.countryId or ensure city exists in DB. [DEBUG targetCity="${targetCity}" matched="${matchedCity?.name || 'null'}" matchedCityId="${matchedCity?._id || '-'}" matchedCountryId="${matchedCity?.country_id || '-'}" providedCityId="${cityId || '-'}" providedCountryId="${countryId || '-'}"]`);
+          const skipMsg = `Skip event "${event.eventName || series.esName}" – city/country id missing; pass meta.cityId/meta.countryId or ensure city exists in DB. [DEBUG targetCity="${targetCity}" matched="${matchedCity?.name || 'null'}" matchedCityId="${matchedCity?._id || '-'}" matchedCountryId="${matchedCity?.country_id || '-'}" providedCityId="${cityId || '-'}" providedCountryId="${countryId || '-'}"]`;
+          infoTexts.push(skipMsg);
+          await logProgress(operationId, `INFO: ${skipMsg}`);
           continue;
         }
 
@@ -386,7 +392,9 @@ async function parseEventim({ meta, operationId }) {
       try {
         fs.unlinkSync(extractedPath);
       } catch (unlinkErr) {
-        errorTexts.push(`Failed to delete extracted file: ${unlinkErr.message}`);
+        const unlinkMsg = `Failed to delete extracted file: ${unlinkErr.message}`;
+        infoTexts.push(unlinkMsg);
+        await logProgress(operationId, `WARNING: ${unlinkMsg}`);
       }
     }
 
@@ -418,6 +426,10 @@ async function parseEventim({ meta, operationId }) {
       });
     }
     
+    const operation = await OperationsSchema.findById(operationId);
+    const finalInfoText = operation?.infoText || '';
+    const additionalInfo = infoTexts.length > 0 ? `\n${infoTexts.join('\n')}` : '';
+    
     await OperationsSchema.findByIdAndUpdate(operationId, {
       status: 'success',
       finish_time: new Date(),
@@ -427,6 +439,7 @@ async function parseEventim({ meta, operationId }) {
         errors: errorTexts.length,
       }),
       errorText: errorTexts.join('\n'),
+      infoText: finalInfoText + additionalInfo,
     });
   } catch (error) {
     logger.error(`Error saving events to database: ${error.message || error}`, error);
