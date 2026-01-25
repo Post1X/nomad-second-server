@@ -96,22 +96,20 @@ yarn prod
 ```
 
 ### GET /parsing/operations
-Возвращает список операций указанного типа, которые еще не были взяты (is_taken: false). После запроса все возвращенные операции помечаются как is_taken: true и больше не будут возвращаться.
+Возвращает **последнюю** операцию указанного типа, ещё не взятую (is_taken: false), и её мероприятия с пагинацией. После запроса эта операция помечается как is_taken: true.
 
 **Query параметры:**
-- `type` (обязательно) - тип операции (parsingEventsFromFienta, parsingEventsFromEventim, parsingEventsFromKontramarka)
-- `limit` (опционально) - количество операций на странице. Если не указан, возвращаются все операции
-- `skip` (опционально) - количество операций для пропуска (пагинация). Если не указан, начинается с 0
-- `includeEvents` (опционально, по умолчанию false) - включить мероприятия в ответ (true/false)
+- `type` (обязательно) — тип операции (parsingEventsFromFienta, parsingEventsFromEventim, parsingEventsFromKontramarka)
+- `page` (опционально, по умолчанию 1) — номер страницы по **событиям**
+- `per_page` (опционально, по умолчанию 20, макс. 100) — количество **событий** на странице
 
 **Важно:**
-- Операции с `is_taken: true` не возвращаются
-- После каждого запроса все возвращенные операции автоматически помечаются как `is_taken: true`
-- Если `limit` и `skip` не указаны, возвращаются все доступные операции
+- Берётся только одна операция — последняя подходящая по дате
+- `page` и `per_page` задают пагинацию по событиям этой операции
 
 **Пример запроса:**
 ```
-GET /parsing/operations?type=parsingEventsFromFienta&limit=20&skip=0&includeEvents=true
+GET /parsing/operations?type=parsingEventsFromFienta&page=1&per_page=20
 ```
 
 **Ответ:**
@@ -130,16 +128,20 @@ GET /parsing/operations?type=parsingEventsFromFienta&limit=20&skip=0&includeEven
       "updatedAt": "2026-01-09T11:05:00.000Z",
       "finish_time": "2026-01-09T11:05:00.000Z",
       "is_processed": false,
-      "is_taken": false,
-      "events": [...],  // только если includeEvents=true
-      "totalEvents": 150  // только если includeEvents=true
+      "is_taken": true
     }
   ],
-  "total": 25,
-  "limit": 20,  // только если указан limit
-  "skip": 0     // только если указан skip
+  "events": [...],
+  "totalEvents": 150,
+  "totalPages": 8,
+  "page": 1,
+  "per_page": 20
 }
 ```
+- `events` — мероприятия последней операции на текущей странице (пагинация по событиям)
+- `totalEvents` — всего событий у этой операции
+- `totalPages` — число страниц по событиям при заданных `per_page`
+- Если подходящих операций нет: `operations: []`, `events: []`, `totalEvents: 0`, `totalPages: 0`
 
 ### POST /parsing/cleanup
 Очищает старые данные (ParsedEventsSchema).

@@ -117,13 +117,14 @@ class ParsingController {
   };
 
   // GET /parsing/operations
+  // Возвращает последнюю операцию и её события с пагинацией по page/per_page (пагинация по events).
+  // Query: type (required), page, per_page
   static getOperations = async (req, res, next) => {
     try {
       const {
         type,
-        limit,
-        skip,
-        includeEvents = 'false',
+        page: pageParam,
+        per_page: perPageParam,
       } = req.query;
 
       const filter = {
@@ -139,86 +140,71 @@ class ParsingController {
 
       filter.type = type;
 
-      let query = OperationsSchema.find(filter).sort({ createdAt: -1       });
+      const page = Math.max(1, parseInt(String(pageParam || 1), 10) || 1);
+      const per_page = Math.max(1, Math.min(100, parseInt(String(perPageParam || 20), 10) || 20));
 
-      const hasPagination = limit !== undefined || skip !== undefined;
-      
-      if (hasPagination) {
-        const limitValue = limit ? parseInt(limit, 10) : undefined;
-        const skipValue = skip ? parseInt(skip, 10) : 0;
-        
-        if (limitValue) {
-          query = query.limit(limitValue);
-        }
-        if (skipValue) {
-          query = query.skip(skipValue);
-        }
+      const operation = await OperationsSchema.findOne(filter)
+        .sort({ createdAt: -1 })
+        .lean();
+
+      if (!operation) {
+        return res.json({
+          status: 'ok',
+          operations: [],
+          events: [],
+          totalEvents: 0,
+          totalPages: 0,
+          page,
+          per_page,
+        });
       }
 
-      const operations = await query.lean();
-      const total = await OperationsSchema.countDocuments(filter);
+      const totalEvents = await ParsedEventsSchema.countDocuments({ operation: operation._id });
+      const totalPages = Math.max(1, Math.ceil(totalEvents / per_page));
+      const skip = (page - 1) * per_page;
 
-      const result = [];
-      const operationIds = [];
+      const parsedEvents = await ParsedEventsSchema.find({ operation: operation._id })
+        .sort({ batch_number: 1 })
+        .skip(skip)
+        .limit(per_page)
+        .lean();
 
-      const shouldIncludeEvents = includeEvents === 'true';
-
-      for (const operation of operations) {
-        operationIds.push(operation._id);
-
-        const operationData = {
-          _id: operation._id,
-          type: operation.type,
-          status: operation.status,
-          statistics: operation.statistics,
-          errorText: operation.errorText,
-          infoText: operation.infoText,
-          createdAt: operation.createdAt,
-          updatedAt: operation.updatedAt,
-          finish_time: operation.finish_time,
-          is_processed: operation.is_processed,
-          is_taken: operation.is_taken,
-        };
-
-        if (shouldIncludeEvents) {
-          const parsedEvents = await ParsedEventsSchema.find({ operation: operation._id })
-            .sort({ batch_number: 1 })
-            .lean();
-
-          const events = parsedEvents.map(pe => {
-            const eventData = pe.event_data;
-            if (eventData && !eventData.operationId) {
-              eventData.operationId = operation._id.toString();
-            }
-            return eventData;
-          });
-
-          operationData.events = events;
-          operationData.totalEvents = events.length;
+      const events = parsedEvents.map((pe) => {
+        const eventData = pe.event_data;
+        if (eventData && !eventData.operationId) {
+          eventData.operationId = operation._id.toString();
         }
+        return eventData;
+      });
 
-        result.push(operationData);
+      const isLastPage = page >= totalPages;
+      if (isLastPage) {
+        await OperationsSchema.findByIdAndUpdate(operation._id, { $set: { is_taken: true } });
       }
 
-      if (operationIds.length > 0) {
-        await OperationsSchema.updateMany(
-          { _id: { $in: operationIds } },
-          { $set: { is_taken: true } }
-        );
-      }
-
-      const response = {
-        status: 'ok',
-        operations: result,
-        total,
+      const operationData = {
+        _id: operation._id,
+        type: operation.type,
+        status: operation.status,
+        statistics: operation.statistics,
+        errorText: operation.errorText,
+        infoText: operation.infoText,
+        createdAt: operation.createdAt,
+        updatedAt: operation.updatedAt,
+        finish_time: operation.finish_time,
+        is_processed: operation.is_processed,
+        is_taken: isLastPage,
       };
 
-      if (hasPagination) {
-        response.limit = limit ? parseInt(limit, 10) : undefined;
-        response.skip = skip ? parseInt(skip, 10) : 0;
-      }
-
-      res.json(response);
+      res.json({
+        status: 'ok',
+        operations: [operationData],
+        events,
+        totalEvents,
+        totalPages,
+        page,
+        per_page,
+      });
     } catch (error) {
       next(error);
     }

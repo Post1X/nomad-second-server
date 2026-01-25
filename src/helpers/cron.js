@@ -8,7 +8,38 @@ import { createLoggerWithSource } from './logger';
 
 const logger = createLoggerWithSource('CRON');
 
+const fn = async () => {
+  logger.info('Starting Kontramarka parsing...');
+  try {
+    const operation = new OperationsSchema({
+      type: OPERATION_TYPES.parsingEventsFromKontramarka,
+      status: OPERATION_STATUSES.pending,
+      statistics: '',
+      errorText: '',
+      infoText: 'Operation created by cron, starting parsing...',
+      is_processed: false,
+      is_taken: false,
+    });
+    await operation.save();
+
+    await OperationsSchema.findByIdAndUpdate(operation._id, {
+      status: OPERATION_STATUSES.processing,
+      infoText: 'Parsing started...',
+    });
+
+    await parseKontramarka({
+      meta: {
+        specialization: 'Event',
+      },
+      operationId: operation._id,
+    });
+  } catch (error) {
+    logger.error(`Error in Kontramarka parsing: ${error.message || error}`);
+  }
+}
+
 const setupCron = () => {
+  fn();
   cron.schedule('0 2 * * 1', async () => {
     logger.info('Starting Kontramarka parsing...');
     try {

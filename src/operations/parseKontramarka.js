@@ -59,6 +59,43 @@ const buildCitySlug = (name = '') => {
   return encodeURIComponent(prefer.toLowerCase().replace(/\s+/g, '-'));
 };
 
+/** Форматирует массив дат в текстовое поле: "12–19 февраля" или "12, 16, 22 февраля" */
+const formatHoldingDate = (dateArray) => {
+  if (!dateArray || dateArray.length === 0) return '';
+  const seen = new Set();
+  const uniques = [];
+  for (const d of dateArray) {
+    if (!d || !(d instanceof Date)) continue;
+    const key = `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    uniques.push(new Date(d.getFullYear(), d.getMonth(), d.getDate()));
+  }
+  uniques.sort((a, b) => a.getTime() - b.getTime());
+  if (uniques.length === 1) return moment(uniques[0]).format('D MMMM');
+
+  const byMonth = new Map();
+  for (const d of uniques) {
+    const k = `${d.getFullYear()}-${d.getMonth()}`;
+    if (!byMonth.has(k)) byMonth.set(k, []);
+    byMonth.get(k).push(d);
+  }
+  const parts = [];
+  for (const k of [...byMonth.keys()].sort()) {
+    const arr = byMonth.get(k);
+    const m = moment(arr[0]);
+    if (arr.length === 1) {
+      parts.push(m.format('D MMMM'));
+    } else if (arr.length === 2) {
+      parts.push(`${moment(arr[0]).format('D')}–${moment(arr[1]).format('D')} ${m.format('MMMM')}`);
+    } else {
+      parts.push(arr.map((d) => moment(d).format('D')).join(', ') + ' ' + m.format('MMMM'));
+    }
+
+  }
+  return parts.join(', ');
+};
+
 const poolAll = async (items, limit, worker) => {
   const results = [];
   const queue = [...items];
@@ -202,6 +239,9 @@ async function parseKontramarka({ meta, operationId }) {
               };
             }).filter(Boolean));
 
+            const groupKey = (name, address) => `${String(name).trim()}\n${String(address).trim()}`;
+            const groups = new Map();
+
             for (const slot of slots) {
               const matchedCity = findCity(cities, slot.cityName || cityItem.name);
               const fallbackCoords = parseCoordinatesField(matchedCity?.coordinates);
@@ -218,42 +258,67 @@ async function parseKontramarka({ meta, operationId }) {
 
               const dateStart = slot.startIso ? new Date(slot.startIso) : null;
               const dateEnd = slot.endIso ? new Date(slot.endIso) : dateStart;
-              const holdingDate = dateStart ? dateStart.toISOString() : slot.startIso || '';
+              const address = [slot.place || card.venue, slot.address || cityItem.name.split('|')[0]].filter(Boolean).join(', ');
+              const key = groupKey(card.title, address);
+
+              if (!groups.has(key)) {
+                groups.set(key, {
+                  name: card.title,
+                  address,
+                  resolvedCityId,
+                  resolvedCountryId,
+                  fallbackCoords,
+                  dates: [],
+                  prices: [],
+                  description: slot.description || card.title,
+                  photoUrl: slot.image || photoUrl,
+                  tourUrl,
+                });
+              }
+              const g = groups.get(key);
+              if (dateStart) g.dates.push(dateStart);
+              if (typeof slot.price === 'number') g.prices.push(slot.price);
+            }
+
+            for (const g of groups.values()) {
+              const dateStart = g.dates.length ? new Date(Math.min(...g.dates.map((d) => d.getTime()))) : null;
+              const dateEnd = g.dates.length ? new Date(Math.max(...g.dates.map((d) => d.getTime()))) : null;
+              const holdingDateStr = formatHoldingDate(g.dates);
 
               const newEvent = {
-                name: card.title,
-                description: slot.description || card.title,
+                name: g.name,
+                description: g.description,
                 specialization,
                 admin_id: adminId,
-                country_id: resolvedCountryId,
-                city_id: resolvedCityId,
+                country_id: g.resolvedCountryId,
+                city_id: g.resolvedCityId,
                 operationId: operationId,
-                contacts: { website: tourUrl },
-                photos: (slot.image || photoUrl) ? [{ full_url: slot.image || photoUrl }] : [],
-                holding_date: holdingDate,
+                contacts: { website: g.tourUrl },
+                photos: g.photoUrl ? [{ full_url: g.photoUrl }] : [],
+                holding_date: holdingDateStr,
                 date_start: dateStart,
                 date_end: dateEnd,
                 source: EVENT_SOURCE.kontramarka,
-                address: [slot.place || card.venue, slot.address || cityItem.name.split('|')[0]].filter(Boolean).join(', '),
+                address: g.address,
               };
 
-              if (fallbackCoords?.lat && fallbackCoords?.lon) {
-                newEvent.lat = fallbackCoords.lat;
-                newEvent.lon = fallbackCoords.lon;
-                newEvent.is_special_point_on_map = fallbackCoords.is_special_point_on_map;
+              if (g.fallbackCoords?.lat && g.fallbackCoords?.lon) {
+                newEvent.lat = g.fallbackCoords.lat;
+                newEvent.lon = g.fallbackCoords.lon;
+                newEvent.is_special_point_on_map = g.fallbackCoords.is_special_point_on_map;
               }
 
-              if (typeof slot.price === 'number') {
-                newEvent.min_price = slot.price;
-                newEvent.max_price = slot.price;
+              if (g.prices.length) {
+                newEvent.min_price = Math.min(...g.prices);
+                newEvent.max_price = Math.max(...g.prices);
               }
 
               cityEvents.push(newEvent);
             }
           } catch (detailErr) {
             const errMsg = `Error opening tour ${tourUrl}: ${detailErr?.message || detailErr}`;
-            errorTexts.push(errMsg);
-            await logProgress(operationId, `ERROR: ${errMsg}`);
+            infoTexts.push(errMsg);
+            await logProgress(operationId, `WARNING: ${errMsg}`);
           } finally {
             await detail.close();
           }
@@ -270,8 +335,8 @@ async function parseKontramarka({ meta, operationId }) {
         }
       } catch (e) {
         const errMsg = `Error for city ${cityItem.name}: ${e?.message || e}`;
-        errorTexts.push(errMsg);
-        await logProgress(operationId, `ERROR: ${errMsg}`);
+        infoTexts.push(errMsg);
+        await logProgress(operationId, `WARNING: ${errMsg}`);
       } finally {
         await page.close();
       }
