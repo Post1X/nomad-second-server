@@ -1,188 +1,30 @@
-import moment from 'moment';
-import puppeteer from 'puppeteer';
-import { load as cheerioLoad } from 'cheerio';
-import CitiesSchema from '../schemas/CitiesSchema';
+import puppeteer from 'puppeteer-extra';
+import StealthPlugin from 'puppeteer-extra-plugin-stealth';
 import OperationsSchema from '../schemas/OperationsSchema';
-import ParsedEventsSchema from '../schemas/ParsedEventsSchema';
-import { EVENT_SOURCE } from '../helpers/constants';
+import CitiesSchema from '../schemas/CitiesSchema';
 import { createLoggerWithSource } from '../helpers/logger';
 
 const logger = createLoggerWithSource('PARSE_FIENTA');
 
-const citiesCache = {
-  list: null,
-};
+puppeteer.use(StealthPlugin());
 
-const normalize = (str = '') => str
-  .toString()
-  .toLowerCase()
-  .normalize('NFD')
-  .replace(/[\u0300-\u036f]/g, '')
-  .replace(/\s+/g, ' ')
-  .trim();
+/**
+ * Тест первого этапа: обрабатывать только эти города.
+ * Подставь сюда _id десяти городов — массив строк или одну строку через запятую, например:
+ * ['507f1f77bcf86cd799439011', '507f1f77bcf86cd799439012']
+ * или в .env/конфиге передать строку и парсить через .split(',').
+ * Пустой массив = обрабатывать все отфильтрованные города.
+ */
+// const TEST_CITY_IDS = ['67bb15e8ffb030b6113c86ee', '6837fc6e8a72929899db9996', '67534bc22279503123f77dad', '68ce4a072afd2c36182dc413', '67c813e8c2142c6dfb6f75c6', '674869eb2279503123f6ccf6'];
+const TEST_CITY_IDS = ['6837fc6e8a72929899db9996'];
 
-const cityTokens = (name = '') => name.split('|').map((s) => normalize(s)).filter(Boolean);
-
-const findCity = (cities, targetName = '') => {
-  const target = normalize(targetName);
-  if (!target) return null;
-  return cities.find((c) => {
-    const tokens = cityTokens(c.name);
-    return tokens.some((tok) => target.includes(tok) || tok.includes(target));
-  }) || null;
-};
-
-const parseCoordinatesField = (coord) => {
-  if (!coord) return null;
-  if (typeof coord === 'object' && coord.lat && coord.lon) {
-    return {
-      lat: parseFloat(coord.lat),
-      lon: parseFloat(coord.lon),
-      is_special_point_on_map: false,
-    };
-  }
-  if (typeof coord === 'string') {
-    const match = coord.match(/lat\s*=\s*([0-9.,\-]+)[^\d\-]+lon\s*=\s*([0-9.,\-]+)/i);
-    if (match) {
-      return {
-        lat: parseFloat(match[1].replace(',', '.')),
-        lon: parseFloat(match[2].replace(',', '.')),
-        is_special_point_on_map: false,
-      };
-    }
-  }
-  return null;
-};
+const citiesCache = { list: null };
 
 const loadCities = async () => {
   if (citiesCache.list) return citiesCache.list;
   citiesCache.list = await CitiesSchema.find({}).lean();
   return citiesCache.list;
 };
-
-async function extractEventFromPageHtml(html, cityName) {
-  const $ = cheerioLoad(html);
-
-  const pickEventJson = () => {
-    const scripts = $('script[type="application/ld+json"]')
-      .map((_, el) => $(el).text())
-      .get();
-    for (const txt of scripts) {
-      try {
-        const parsed = JSON.parse(txt);
-        if (Array.isArray(parsed)) {
-          const evt = parsed.find((it) => it['@type'] === 'Event');
-          if (evt) return evt;
-        }
-        if (parsed && parsed['@type'] === 'Event') return parsed;
-      } catch (err) { /* ignore */ }
-    }
-    return null;
-  };
-
-  const evtJson = pickEventJson();
-  if (!evtJson) {
-    return [];
-  }
-
-  const offers = evtJson?.offers || [];
-  const prices = offers.map((o) => parseFloat(String(o.price).replace(',', '.'))).filter((n) => !Number.isNaN(n));
-  const minPrice = prices.length ? Math.min(...prices) : null;
-  const maxPrice = prices.length ? Math.max(...prices) : null;
-
-  const locationAddress = evtJson?.location?.address;
-  const addressParts = [];
-  if (locationAddress?.streetAddress) addressParts.push(locationAddress.streetAddress);
-  if (locationAddress?.addressLocality) addressParts.push(locationAddress.addressLocality);
-  const addressFromJson = addressParts.join(', ');
-  
-  const locationName = evtJson?.location?.name || '';
-  const locationFromHtml = $('.location').first().text().trim() || '';
-  const baseAddress = addressFromJson || locationName || locationFromHtml;
-
-  const baseEvent = {
-    name: evtJson?.name || $('meta[property="og:title"]').attr('content') || '',
-    description: evtJson?.description || evtJson?.name || '',
-    image: Array.isArray(evtJson?.image) ? evtJson.image[0] : evtJson?.image,
-    url: evtJson?.url || '',
-    address: baseAddress,
-    minPrice,
-    maxPrice,
-  };
-
-  const seriesItems = $('.series-item').toArray();
-  
-  if (seriesItems.length === 0) {
-    return [{
-      ...baseEvent,
-      startDate: evtJson?.startDate,
-      endDate: evtJson?.endDate || evtJson?.startDate,
-      holdingDate: evtJson?.startDate || '',
-    }];
-  }
-
-  const events = [];
-  for (const seriesItem of seriesItems) {
-    const seriesText = $(seriesItem).text().trim();
-    const seriesLines = seriesText.split('\n').map((t) => t.trim()).filter(Boolean);
-    
-    let dateText = seriesLines[0] || '';
-    const timeText = seriesLines[1] || '';
-    
-    let startDate = evtJson?.startDate;
-    let endDate = evtJson?.endDate || evtJson?.startDate;
-    let holdingDate = evtJson?.startDate || '';
-
-    if (dateText) {
-      try {
-        const cleanDateText = dateText.trim();
-        
-        const hasYear = /\d{4}/.test(cleanDateText);
-        
-        let parsedDate = null;
-        
-        if (hasYear) {
-          parsedDate = moment(cleanDateText, ['ddd, DD MMM, YYYY', 'ddd, DD MMM YYYY', 'DD MMM, YYYY', 'DD MMM YYYY', 'YYYY-MM-DD'], true);
-        } else {
-          const currentYear = moment().year();
-          const dateWithCurrentYear = `${cleanDateText} ${currentYear}`;
-          parsedDate = moment(dateWithCurrentYear, ['ddd, DD MMM YYYY', 'DD MMM YYYY'], true);
-          
-          if (parsedDate.isValid() && parsedDate.isBefore(moment(), 'day')) {
-            const dateWithNextYear = `${cleanDateText} ${currentYear + 1}`;
-            parsedDate = moment(dateWithNextYear, ['ddd, DD MMM YYYY', 'DD MMM YYYY'], true);
-          }
-        }
-        
-        if (parsedDate && parsedDate.isValid()) {
-          if (timeText) {
-            const timeMatch = timeText.match(/(\d{1,2}):(\d{2})/);
-            if (timeMatch) {
-              const hours = parseInt(timeMatch[1], 10);
-              const minutes = parseInt(timeMatch[2], 10);
-              if (!Number.isNaN(hours) && !Number.isNaN(minutes)) {
-                parsedDate.hours(hours).minutes(minutes).seconds(0).milliseconds(0);
-              }
-            }
-          }
-          startDate = parsedDate.toISOString();
-          endDate = parsedDate.toISOString();
-          holdingDate = parsedDate.toISOString();
-        }
-      } catch (e) {
-      }
-    }
-
-    events.push({
-      ...baseEvent,
-      startDate,
-      endDate,
-      holdingDate,
-    });
-  }
-
-  return events;
-}
 
 const logProgress = async (operationId, message) => {
   if (operationId) {
@@ -201,232 +43,262 @@ const logProgress = async (operationId, message) => {
 };
 
 async function parseFienta({ meta, operationId }) {
-  const events = [];
   const errorTexts = [];
-  const infoTexts = [];
+  const infoLines = [];
 
   const {
-    adminId, countryId, cityId, cityName, specialization = 'Event', maxCities,
+    adminId,
+    countryId,
+    cityId,
+    cityName,
+    specialization = 'Event',
+    maxCities,
   } = meta || {};
-  
+
   const citiesAll = await loadCities();
-  
-  let cities = citiesAll;
+
+  const excludePatterns = ['удаленно', 'все города'];
+  const hasExcludedText = (name) => excludePatterns.some((p) => String(name || '').toLowerCase().includes(p.toLowerCase()));
+  const hasOriginalName = (name) => String(name || '').includes('|');
+
+  const afterRemote = citiesAll.filter((c) => !hasExcludedText(c.name));
+  const afterOriginal = afterRemote.filter((c) => hasOriginalName(c.name));
+  const excludedRemote = citiesAll.length - afterRemote.length;
+  const excludedNoOriginal = afterRemote.length - afterOriginal.length;
+
+  infoLines.push(
+    `Города: всего ${citiesAll.length}, исключено "удаленно/все города": ${excludedRemote}, без ориг. названия: ${excludedNoOriginal}, к обработке: ${afterOriginal.length}`
+  );
+  await logProgress(operationId, infoLines[infoLines.length - 1]);
+
+  let cities = afterOriginal;
+  const testIds = Array.isArray(TEST_CITY_IDS)
+    ? TEST_CITY_IDS
+    : (typeof TEST_CITY_IDS === 'string' ? TEST_CITY_IDS.split(',').map((s) => s.trim()).filter(Boolean) : []);
+  if (testIds.length > 0) {
+    const idSet = new Set(testIds.map((id) => String(id).trim()).filter(Boolean));
+    cities = afterOriginal.filter((c) => idSet.has(c._id.toString()));
+    infoLines.push(`Режим теста: только города с _id из TEST_CITY_IDS, их ${cities.length}`);
+    await logProgress(operationId, infoLines[infoLines.length - 1]);
+  }
   if (cityName || cityId) {
     if (cityId) {
-      cities = citiesAll.filter((c) => c._id.toString() === cityId.toString());
+      cities = cities.filter((c) => c._id.toString() === String(cityId));
     } else if (cityName) {
-      const normalizedCityName = normalize(cityName);
-      cities = citiesAll.filter((c) => {
-        const tokens = cityTokens(c.name);
-        return tokens.some((tok) => normalizedCityName.includes(tok) || tok.includes(normalizedCityName));
-      });
+      const n = String(cityName).toLowerCase();
+      cities = cities.filter((c) => String(c.name || '').toLowerCase().includes(n));
     }
-    
-    if (cities.length === 0) {
-      const errorMsg = `City not found: ${cityName || cityId}`;
-      errorTexts.push(errorMsg);
-      await logProgress(operationId, `ERROR: ${errorMsg}`);
-      await OperationsSchema.findByIdAndUpdate(operationId, {
-        status: 'error',
-        errorText: errorTexts.join('\n'),
-        finish_time: new Date(),
-      });
-      return;
-    }
-    
-    await logProgress(operationId, `Filtered to ${cities.length} city(ies) based on meta.cityName/cityId`);
   }
-  
   if (typeof maxCities === 'number' && maxCities > 0) {
     cities = cities.slice(0, maxCities);
   }
 
-  await logProgress(operationId, `Starting Fienta parsing. Cities to process: ${cities.length}`);
-
-  let browser;
-
-  try {
-    await logProgress(operationId, 'Launching browser...');
-    try {
-      browser = await puppeteer.launch({
-        headless: 'new',
-        args: ['--no-sandbox', '--disable-setuid-sandbox'],
-      });
-      await logProgress(operationId, 'Browser launched successfully');
-    } catch (launchError) {
-      const errorMsg = `Failed to launch browser: ${launchError?.message || launchError}`;
-      errorTexts.push(errorMsg);
-      await logProgress(operationId, `FATAL ERROR: ${errorMsg}`);
-      throw new Error(errorMsg);
-    }
-    
-    for (const city of cities) {
-      const cityToken = cityTokens(city.name)[1] || cityTokens(city.name)[0] || cityName || '';
-      const searchUrl = `https://fienta.com/?country=&city=${encodeURIComponent(cityToken)}`;
-      await logProgress(operationId, `Processing city: ${city.name} (${cityToken})`);
-      const page = await browser.newPage();
-      let scraped = 0;
-      let skippedMissingIds = 0;
-      let added = 0;
-      try {
-        await logProgress(operationId, `Loading search page for ${city.name}...`);
-        await page.goto(searchUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
-        const eventLinks = await page.$$eval('#events a[href*="fienta.com"]', (anchors) => {
-          const urls = anchors.map((a) => a.href.split('#')[0]);
-          return Array.from(new Set(urls));
-        });
-        await page.close();
-        await logProgress(operationId, `Found ${eventLinks.length} events for ${city.name}`);
-
-        for (const link of eventLinks) {
-          await logProgress(operationId, `Processing event: ${link}`);
-          const p = await browser.newPage();
-          let html = null;
-          try {
-            await logProgress(operationId, `Loading event page...`);
-            await p.goto(link, { waitUntil: 'domcontentloaded', timeout: 20000 });
-            html = await p.content();
-            if (p && !p.isClosed()) {
-              await p.close();
-            }
-            await logProgress(operationId, 'Parsing event HTML...');
-            const parsedArray = await extractEventFromPageHtml(html, cityToken);
-            if (!parsedArray || parsedArray.length === 0 || !parsedArray[0]?.name) {
-              await logProgress(operationId, 'No valid event data found, skipping');
-              continue;
-            }
-
-            await logProgress(operationId, `Found ${parsedArray.length} date(s), processing all...`);
-            for (const parsed of parsedArray) {
-              const dateStart = parsed.startDate ? new Date(parsed.startDate) : null;
-              const dateEnd = parsed.endDate ? new Date(parsed.endDate) : dateStart;
-              const holdingDate = dateStart ? dateStart.toISOString() : parsed.holdingDate || parsed.startDate || '';
-
-              const targetCity = cityToken || parsed.address || parsed.name || '';
-              const matchedCity = findCity(citiesAll, targetCity || parsed.address || parsed.name || '');
-              const fallbackCoords = parseCoordinatesField(matchedCity?.coordinates);
-              const resolvedCityId = cityId || matchedCity?._id || null;
-              const resolvedCountryId = countryId || matchedCity?.country_id || null;
-
-              if (!resolvedCityId || !resolvedCountryId) {
-                const skipMsg = `Skip event "${parsed.name}" – city/country id missing; pass meta.cityId/meta.countryId or ensure city exists in DB. [DEBUG targetCity="${targetCity}" matched="${matchedCity?.name || 'null'}" matchedCityId="${matchedCity?._id || '-'}" matchedCountryId="${matchedCity?.country_id || '-'}" providedCityId="${cityId || '-'}" providedCountryId="${countryId || '-'}"]`;
-                infoTexts.push(skipMsg);
-                await logProgress(operationId, `INFO: ${skipMsg}`);
-                skippedMissingIds += 1;
-                continue;
-              }
-
-              const event = {
-                name: parsed.name,
-                description: parsed.description || parsed.name,
-                specialization,
-                admin_id: adminId,
-                country_id: resolvedCountryId,
-                city_id: resolvedCityId,
-                contacts: { website: parsed.url || link },
-                photos: parsed.image ? [{ full_url: parsed.image }] : [],
-                holding_date: holdingDate,
-                date_start: dateStart,
-                date_end: dateEnd,
-                source: EVENT_SOURCE.fienta,
-                address: parsed.address || cityToken || '',
-                operationId: operationId,
-              };
-
-              if (fallbackCoords?.lat && fallbackCoords?.lon) {
-                event.lat = fallbackCoords.lat;
-                event.lon = fallbackCoords.lon;
-                event.is_special_point_on_map = fallbackCoords.is_special_point_on_map;
-              }
-
-              if (parsed.minPrice || parsed.maxPrice) {
-                event.min_price = parsed.minPrice;
-                event.max_price = parsed.maxPrice;
-              }
-
-              events.push(event);
-              added += 1;
-            }
-            scraped += 1;
-            await logProgress(operationId, `Event processed successfully: ${parsedArray[0]?.name || 'Unknown'}`);
-          } catch (err) {
-            const errMsg = `Error loading event ${link}: ${err?.message || err}`;
-            errorTexts.push(errMsg);
-            await logProgress(operationId, `ERROR: ${errMsg}`);
-            try {
-              if (p && !p.isClosed()) {
-                await p.close();
-              }
-            } catch (closeErr) {
-            }
-          }
-        }
-        const cityStats = `City ${city.name}: scraped ${scraped}, skippedMissingIds ${skippedMissingIds}, added ${added}`;
-        infoTexts.push(cityStats);
-        await logProgress(operationId, cityStats);
-      } catch (e) {
-        const errMsg = `Error for city ${city.name}: ${e?.message || e}`;
-        errorTexts.push(errMsg);
-        await logProgress(operationId, `ERROR: ${errMsg}`);
-      }
-    }
-    await logProgress(operationId, 'All cities processed. Closing browser...');
-  } catch (e) {
-    const errMsg = e?.message || 'Unknown error while parsing Fienta';
-    errorTexts.push(errMsg);
-    await logProgress(operationId, `FATAL ERROR: ${errMsg}`);
-  } finally {
-    if (browser) {
-      await browser.close();
-      await logProgress(operationId, 'Browser closed');
-    }
-    await logProgress(operationId, `Parsing completed. Total: ${events.length} events parsed`);
-  }
-
-  const BATCH_SIZE = 10;
-  try {
-    for (let i = 0; i < events.length; i += BATCH_SIZE) {
-      const batch = events.slice(i, i + BATCH_SIZE);
-      const batchNumber = Math.floor(i / BATCH_SIZE) + 1;
-      
-      await ParsedEventsSchema.insertMany(
-        batch.map(event => ({
-          operation: operationId,
-          event_data: event,
-          batch_number: batchNumber,
-        }))
-      );
-      
-      const operation = await OperationsSchema.findById(operationId);
-      await OperationsSchema.findByIdAndUpdate(operationId, {
-        infoText: `${operation?.infoText || ''}\nОбработано ${i + batch.length} из ${events.length} событий. Батч ${batchNumber} из ${Math.ceil(events.length / BATCH_SIZE)}`,
-      });
-    }
-    
-    const operation = await OperationsSchema.findById(operationId);
-    const finalInfoText = operation?.infoText || '';
-    const additionalInfo = infoTexts.length > 0 ? `\n${infoTexts.join('\n')}` : '';
-    
-    await OperationsSchema.findByIdAndUpdate(operationId, {
-      status: 'success',
-      finish_time: new Date(),
-      statistics: JSON.stringify({
-        total: events.length,
-        batches: Math.ceil(events.length / BATCH_SIZE),
-        errors: errorTexts.length,
-      }),
-      errorText: errorTexts.join('\n'),
-      infoText: finalInfoText + additionalInfo,
-    });
-  } catch (error) {
+  if (cities.length === 0) {
     await OperationsSchema.findByIdAndUpdate(operationId, {
       status: 'error',
-      errorText: error.message || 'Unknown error while saving events',
+      errorText: 'Нет городов для обработки после фильтров',
       finish_time: new Date(),
+      infoText: infoLines.join('\n'),
     });
+    return;
   }
+
+  const cityToken = (city) => {
+    const parts = String(city.name || '').split('|').map((s) => s.trim()).filter(Boolean);
+    return parts[1] || parts[0] || '';
+  };
+
+  const result = {
+    cities: cities.map((c) => ({
+      city_name: c.name,
+      city_id: c._id,
+      single_date_event_urls: [],
+      multiple_date_event_urls: [],
+    })),
+    multiple_cities_event_urls: [],
+  };
+
+  const seenMultipleCities = new Set();
+
+  let browser;
+  try {
+    await logProgress(operationId, 'Launching browser (stealth)...');
+    browser = await puppeteer.launch({
+      headless: 'new',
+      args: [
+        '--no-sandbox',
+        '--disable-setuid-sandbox',
+        '--disable-blink-features=AutomationControlled',
+        '--disable-features=IsolateOrigins,site-per-process',
+      ],
+    });
+    await logProgress(operationId, 'Browser launched.');
+
+    for (let ci = 0; ci < cities.length; ci += 1) {
+      const city = cities[ci];
+      const cityEntry = result.cities.find((e) => e.city_id.toString() === city._id.toString());
+      const token = cityToken(city);
+      const searchUrl = `https://fienta.com/?country=&city=${encodeURIComponent(token)}`;
+      console.log({ searchUrl });
+      // При антиботе сайт может отдавать другой/перемешанный контент. Используем puppeteer-extra-plugin-stealth.
+      // Если карточки всё равно не по городу — рассмотреть: прокси из нужной страны или сбор без фильтра по city с последующей фильтрацией по venue на странице события.
+
+      await logProgress(operationId, `City ${ci + 1}/${cities.length}: ${city.name}`);
+
+      const page = await browser.newPage();
+      await page.setUserAgent(
+        'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+      );
+      await page.setExtraHTTPHeaders({ 'Accept-Language': 'en-US,en;q=0.9,de;q=0.8' });
+      await page.setViewport({ width: 1280, height: 800 });
+
+      let multiCityCountThisCity = 0;
+      try {
+        await page.goto(searchUrl, { waitUntil: 'networkidle2', timeout: 45000 });
+        await page.waitForSelector('.search-result, .event-card, #events', { timeout: 15000 }).catch(() => {});
+        await new Promise((r) => setTimeout(r, 1500));
+        const cards = await page.$$eval('.search-result', (rows) =>
+          rows.map((el) => {
+            const a = el.querySelector('article.event-card a[href*="fienta.com"]');
+            if (!a) return null;
+            const href = (a.getAttribute('href') || '').split('#')[0].trim();
+            const body = el.querySelector('.event-card-body');
+            const titleEl = body ? body.querySelector('.event-card-title h2') : null;
+            const title = (titleEl && titleEl.textContent) ? titleEl.textContent.trim() : '';
+            const smalls = body ? body.querySelectorAll('p.small') : [];
+            const dateText = (smalls[0] && smalls[0].textContent) || '';
+            const venueText = (smalls[1] && smalls[1].textContent) || '';
+            return { href, title, dateText, venueText };
+          })
+        );
+
+        const validCards = cards.filter(Boolean);
+        const seenSingle = new Set();
+        const seenMultiple = new Set();
+
+        for (const card of validCards) {
+          const venueLower = (card.venueText || '').toLowerCase();
+          const dateLower = (card.dateText || '').toLowerCase();
+          const name = (card.title || card.href || '').slice(0, 80);
+          if (venueLower.includes('online')) {
+            console.log(`[Fienta] "${name}" → пропуск (online)`);
+            continue;
+          }
+          const isType3 = venueLower.includes('multiple venues');
+          const isType2 = !isType3 && (dateLower.includes('and few more') || dateLower.includes('one more'));
+          const isType1 = !isType3 && !isType2;
+
+          if (isType1) {
+            console.log(`[Fienta] "${name}" → тип 1 (single_date_event_urls)`);
+            if (!seenSingle.has(card.href)) {
+              seenSingle.add(card.href);
+              cityEntry.single_date_event_urls.push(card.href);
+            }
+            continue;
+          }
+          if (isType2) {
+            console.log(`[Fienta] "${name}" → тип 2 (multiple_date_event_urls)`);
+          } else {
+            console.log(`[Fienta] "${name}" → тип 3 (multiple_cities_event_urls)`);
+          }
+
+          const detailPage = await browser.newPage();
+          try {
+            await detailPage.goto(card.href, { waitUntil: 'domcontentloaded', timeout: 20000 });
+            for (let round = 0; round < 5; round += 1) {
+              const moreBtn = await detailPage.$('#btn-series-items-more');
+              if (moreBtn) {
+                const text = await moreBtn.evaluate((el) => el && el.textContent || '');
+                if (/\bsee more\b|\bещё\b/i.test(text)) {
+                  await moreBtn.click();
+                  await new Promise((r) => setTimeout(r, 800));
+                } else break;
+              } else break;
+            }
+
+            const urls = await detailPage.$$eval('a.series-item[href*="fienta.com"]', (as) =>
+              as
+                .filter((a) => (a.getAttribute('id') || '') !== 'btn-series-items-more')
+                .map((a) => (a.getAttribute('href') || '').split('#')[0].trim())
+                .filter((u) => u && u.includes('fienta.com'))
+            );
+            await detailPage.close();
+
+            const uniqueUrls = [...new Set(urls)];
+            if (isType3) {
+              for (const u of uniqueUrls) {
+                if (!seenMultipleCities.has(u)) {
+                  seenMultipleCities.add(u);
+                  result.multiple_cities_event_urls.push(u);
+                  multiCityCountThisCity += 1;
+                }
+              }
+            } else {
+              for (const u of uniqueUrls) {
+                if (!seenMultiple.has(u)) {
+                  seenMultiple.add(u);
+                  cityEntry.multiple_date_event_urls.push(u);
+                }
+              }
+            }
+          } catch (e) {
+            logger.error(`Fienta detail page ${card.href}: ${e.message}`);
+            try { await detailPage.close(); } catch (_) {}
+          }
+        }
+
+        const single = cityEntry.single_date_event_urls.length;
+        const multi = cityEntry.multiple_date_event_urls.length;
+        const cityLog = {
+          city_name: city.name,
+          city_id: city._id.toString(),
+          single_date_events_count: single,
+          multiple_date_events_count: multi,
+          multiple_cities_events_count: multiCityCountThisCity,
+        };
+        infoLines.push(JSON.stringify(cityLog, null, 2));
+        await logProgress(operationId, `  single: ${single}, multiple dates: ${multi}, multiple cities: ${multiCityCountThisCity}`);
+      } finally {
+        await page.close();
+      }
+    }
+
+    await browser.close();
+    await logProgress(operationId, 'Browser closed.');
+  } catch (e) {
+    errorTexts.push(e?.message || String(e));
+    await logProgress(operationId, `FATAL: ${e?.message || e}`);
+    if (browser) try { await browser.close(); } catch (_) {}
+  }
+
+  const totalSingle = result.cities.reduce((s, c) => s + c.single_date_event_urls.length, 0);
+  const totalMultiple = result.cities.reduce((s, c) => s + c.multiple_date_event_urls.length, 0);
+  const totalMultiCity = result.multiple_cities_event_urls.length;
+  infoLines.push(`Итого: single_date=${totalSingle}, multiple_date=${totalMultiple}, multiple_cities=${totalMultiCity}`);
+
+  const finalPayload = {
+    cities: result.cities.map((c) => ({
+      city_name: c.city_name,
+      city_id: c.city_id.toString(),
+      single_date_event_urls: c.single_date_event_urls,
+      multiple_date_event_urls: c.multiple_date_event_urls,
+    })),
+    multiple_cities_event_urls: result.multiple_cities_event_urls,
+  };
+
+  console.log('Fienta phase 1 — итоговый список URL:', JSON.stringify(finalPayload, null, 2));
+
+  await OperationsSchema.findByIdAndUpdate(operationId, {
+    status: 'success',
+    finish_time: new Date(),
+    errorText: errorTexts.join('\n') || '',
+    infoText: infoLines.join('\n'),
+    statistics: JSON.stringify({
+      total_single_date: totalSingle,
+      total_multiple_date: totalMultiple,
+      total_multiple_cities: totalMultiCity,
+    }),
+  });
 }
 
 export default parseFienta;
-

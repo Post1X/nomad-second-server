@@ -59,7 +59,7 @@ const buildCitySlug = (name = '') => {
   return encodeURIComponent(prefer.toLowerCase().replace(/\s+/g, '-'));
 };
 
-/** Форматирует массив дат в текстовое поле: "12–19 февраля" или "12, 16, 22 февраля" */
+/** Форматирует массив дат в текстовое поле: "12–19 февраля 2025", "12, 16, 22 февраля" или "12 декабря 2024, 15 января 2025" */
 const formatHoldingDate = (dateArray) => {
   if (!dateArray || dateArray.length === 0) return '';
   const seen = new Set();
@@ -72,8 +72,12 @@ const formatHoldingDate = (dateArray) => {
     uniques.push(new Date(d.getFullYear(), d.getMonth(), d.getDate()));
   }
   uniques.sort((a, b) => a.getTime() - b.getTime());
-  if (uniques.length === 1) return moment(uniques[0]).format('D MMMM');
+  if (uniques.length === 1) {
+    return moment(uniques[0]).format('D MMMM YYYY');
+  }
 
+  const years = [...new Set(uniques.map((d) => d.getFullYear()))];
+  const multiYear = years.length > 1;
   const byMonth = new Map();
   for (const d of uniques) {
     const k = `${d.getFullYear()}-${d.getMonth()}`;
@@ -84,16 +88,57 @@ const formatHoldingDate = (dateArray) => {
   for (const k of [...byMonth.keys()].sort()) {
     const arr = byMonth.get(k);
     const m = moment(arr[0]);
+    const withYear = multiYear ? ' YYYY' : '';
     if (arr.length === 1) {
-      parts.push(m.format('D MMMM'));
+      parts.push(m.format('D MMMM' + withYear));
     } else if (arr.length === 2) {
-      parts.push(`${moment(arr[0]).format('D')}–${moment(arr[1]).format('D')} ${m.format('MMMM')}`);
+      parts.push(`${moment(arr[0]).format('D')}–${moment(arr[1]).format('D')} ${m.format('MMMM' + withYear)}`);
     } else {
-      parts.push(arr.map((d) => moment(d).format('D')).join(', ') + ' ' + m.format('MMMM'));
+      parts.push(arr.map((d) => moment(d).format('D')).join(', ') + ' ' + m.format('MMMM' + withYear));
     }
-
   }
-  return parts.join(', ');
+  const result = parts.join(', ');
+  if (!multiYear && years[0] != null) {
+    return `${result} ${years[0]}`;
+  }
+  return result;
+};
+
+/** Объединяет дубликаты по (name, address, city_id): один объект на ключ, даты и цены мержатся. */
+const mergeDuplicateEvents = (events) => {
+  if (!events || events.length === 0) return [];
+  const key = (e) => `${String(e.name).trim()}\n${String(e.address).trim()}\n${(e.city_id || '').toString()}`;
+  const byKey = new Map();
+  for (const e of events) {
+    const k = key(e);
+    if (!byKey.has(k)) byKey.set(k, { events: [], dates: [], prices: [] });
+    const g = byKey.get(k);
+    g.events.push(e);
+    const dates = e._mergeDates || (e.date_start ? [e.date_start] : []);
+    g.dates.push(...dates);
+    if (e.min_price != null) g.prices.push(e.min_price);
+    if (e.max_price != null) g.prices.push(e.max_price);
+  }
+  const result = [];
+  for (const g of byKey.values()) {
+    const first = g.events[0];
+    const toTime = (d) => (d && d.getTime ? d.getTime() : (d ? new Date(d).getTime() : null));
+    const validDates = g.dates.map((d) => (d instanceof Date ? d : new Date(d))).filter((d) => !Number.isNaN(d.getTime()));
+    const dateStart = validDates.length ? new Date(Math.min(...validDates.map(toTime))) : null;
+    const dateEnd = validDates.length ? new Date(Math.max(...validDates.map(toTime))) : null;
+    const holdingDateStr = formatHoldingDate(validDates);
+    const ev = {
+      ...first,
+      date_start: dateStart,
+      date_end: dateEnd,
+      holding_date: holdingDateStr,
+      min_price: g.prices.length ? Math.min(...g.prices) : first.min_price,
+      max_price: g.prices.length ? Math.max(...g.prices) : first.max_price,
+    };
+    delete ev._mergeDates;
+    result.push(ev);
+  }
+  return result;
 };
 
 const poolAll = async (items, limit, worker) => {
@@ -139,6 +184,7 @@ async function parseKontramarka({ meta, operationId }) {
   const errorTexts = [];
   const infoTexts = [];
   let allEvents = [];
+  let mergedEvents = [];
 
   try {
     const {
@@ -312,6 +358,7 @@ async function parseKontramarka({ meta, operationId }) {
                 newEvent.min_price = Math.min(...g.prices);
                 newEvent.max_price = Math.max(...g.prices);
               }
+              newEvent._mergeDates = g.dates;
 
               cityEvents.push(newEvent);
             }
@@ -348,7 +395,8 @@ async function parseKontramarka({ meta, operationId }) {
     await browser.close();
     await logProgress(operationId, 'Browser closed');
 
-    await logProgress(operationId, `Parsing completed. Total: ${allEvents.length} events parsed`);
+    mergedEvents = mergeDuplicateEvents(allEvents || []);
+    await logProgress(operationId, `Parsing completed. Total: ${mergedEvents.length} events (after merging duplicates)`);
   } catch (e) {
     const errMsg = e?.message || 'Unknown error while parsing Kontramarka';
     errorTexts.push(errMsg);
@@ -356,7 +404,7 @@ async function parseKontramarka({ meta, operationId }) {
   }
 
   const BATCH_SIZE = 10;
-  const eventsToSave = allEvents || [];
+  const eventsToSave = mergedEvents.length ? mergedEvents : mergeDuplicateEvents(allEvents || []);
   try {
     for (let i = 0; i < eventsToSave.length; i += BATCH_SIZE) {
       const batch = eventsToSave.slice(i, i + BATCH_SIZE);

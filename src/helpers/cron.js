@@ -9,10 +9,10 @@ import { createLoggerWithSource } from './logger';
 const logger = createLoggerWithSource('CRON');
 
 const fn = async () => {
-  logger.info('Starting Kontramarka parsing...');
+  logger.info('Starting Fienta parsing...');
   try {
     const operation = new OperationsSchema({
-      type: OPERATION_TYPES.parsingEventsFromKontramarka,
+      type: OPERATION_TYPES.parsingEventsFromFienta,
       status: OPERATION_STATUSES.pending,
       statistics: '',
       errorText: '',
@@ -27,14 +27,14 @@ const fn = async () => {
       infoText: 'Parsing started...',
     });
 
-    await parseKontramarka({
+    await parseFienta({
       meta: {
         specialization: 'Event',
       },
       operationId: operation._id,
     });
   } catch (error) {
-    logger.error(`Error in Kontramarka parsing: ${error.message || error}`);
+    logger.error(`Error in Fienta parsing: ${error.message || error}`);
   }
 }
 

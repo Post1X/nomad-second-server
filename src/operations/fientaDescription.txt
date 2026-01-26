@@ -1,0 +1,506 @@
+
+для начала надо взять не все города, что есть в базе,
+а те, которые не имеют текста "удаленно" или "все города".
+и структура названий у нас такая "русское название | оригинальное название",
+либо только русское. надо отсеить те, что не имеют оригинального названия. в infoText выводим, 
+изначально столько то городов, из них столько "удаленно/все города", столько то 
+не имеют ориг названий. потом проходимся по каждому городу и разделяем мероприятия на несколько групп:
+
+1. в одном городе, по одному адресу, с одной датой
+2. в одном городе, по одному адресу, с несколькими датами
+3. в разных городах, дата не имеет значения
+
+вот пример карточки мероприятия в основном списке:
+<div class="col-sm-6 col-lg-4 search-result">
+    <article class="event-card">
+
+        <a href="https://fienta.com/s/suck-it-up-two-comics-one-stage-zero-comfort-atthecomedypub?utm_source=fienta-search">
+
+            <div class="event-card-img-wrapper">
+                                                                                                                                                                <div class="event-card-img-bg"></div>
+                                            <div class="event-card-img">
+<picture>
+<source media="(max-width: 575px)" srcset="https://fienta.com/cf/img/?width=548&amp;height=308&amp;dpr=1&amp;fit=crop&amp;format=webp&amp;gcs=true&amp;file=/org/31977/A368P47cHi2K77p.png 1x,
+https://fienta.com/cf/img/?width=548&amp;height=308&amp;dpr=2&amp;fit=crop&amp;format=webp&amp;gcs=true&amp;file=/org/31977/A368P47cHi2K77p.png 2x" type="image/webp">
+<source srcset="https://fienta.com/cf/img/?width=370&amp;height=208&amp;dpr=1&amp;fit=crop&amp;format=webp&amp;gcs=true&amp;file=/org/31977/A368P47cHi2K77p.png 1x,
+https://fienta.com/cf/img/?width=370&amp;height=208&amp;dpr=2&amp;fit=crop&amp;format=webp&amp;gcs=true&amp;file=/org/31977/A368P47cHi2K77p.png 2x" type="image/webp">
+
+<source media="(max-width: 575px)" srcset="https://fienta.com/cf/img/?width=548&amp;height=308&amp;dpr=1&amp;fit=crop&amp;format=jpeg&amp;gcs=true&amp;file=/org/31977/A368P47cHi2K77p.png 1x,
+https://fienta.com/cf/img/?width=548&amp;height=308&amp;dpr=2&amp;fit=crop&amp;format=jpeg&amp;gcs=true&amp;file=/org/31977/A368P47cHi2K77p.png 2x" type="image/jpeg">
+<source srcset="https://fienta.com/cf/img/?width=370&amp;height=208&amp;dpr=1&amp;fit=crop&amp;format=jpeg&amp;gcs=true&amp;file=/org/31977/A368P47cHi2K77p.png 1x,
+https://fienta.com/cf/img/?width=370&amp;height=208&amp;dpr=2&amp;fit=crop&amp;format=jpeg&amp;gcs=true&amp;file=/org/31977/A368P47cHi2K77p.png 2x" type="image/jpeg">
+<img src="https://fienta.com/cf/img/?width=548&amp;height=308&amp;dpr=1&amp;fit=crop&amp;format=jpeg&amp;gcs=true&amp;file=/org/31977/A368P47cHi2K77p.png" class="position-absolute top-0 w-100 h-100 user-drag-none" width="370" height="208" loading="lazy" alt="" aria-hidden="true">
+</picture>                                                </div>
+                                </div>
+<div class="event-card-body">
+<div class="event-card-title">
+                                                
+                                                        <h2>Suck It Up | Two Comics. One Stage. Zero Comfort @TheComedyPub</h2>
+                                                                                            </div>
+                                                                                            <p class="small">
+    
+                                                                Sun 15. Feb 19:00
+                                                                        and few more
+                                                                                                                    </p>
+                                            <p class="small">
+
+                                                        The Comedy Pub, Wien
+                                                </p>
+                                </div>
+        </a>
+    </article>
+</div>
+
+
+если б в <p>, что сейчас имеет "The Comedy Pub, Wien" был текст (проверять по include) "multiple venues", то это 3ий тип
+если такого нет в <p>, что сейчас имеет "Sun 15. Feb 19:00 and few more" есть текст (проверять по include) "and few more", то это 2ой тип
+если же ни 1 проверка, ни 2 не прошли, то это 1 тип
+
+
+дальше нам надо сформировать список url для каждого мероприятия
+если это тип 1, то достаточно взять href из <a>
+если 2 или 3, то надо дополнительно открыть страницу из href из <a>
+
+вот пример открытой такой страницы (2 или 3 тип):
+<main id="event-container" class="container">
+
+        <div class="card">
+
+            <picture>
+        <source media="(max-width: 991px)" srcset="https://fienta.com/cf/img/?width=690&amp;dpr=1&amp;format=webp&amp;gcs=true&amp;file=/org/21419/zLP8kLaHHvPjhbg.png 1x,
+            https://fienta.com/cf/img/?width=690&amp;dpr=2&amp;format=webp&amp;gcs=true&amp;file=/org/21419/zLP8kLaHHvPjhbg.png 2x" type="image/webp">
+        <source srcset="https://fienta.com/cf/img/?width=1070&amp;dpr=1&amp;format=webp&amp;gcs=true&amp;file=/org/21419/zLP8kLaHHvPjhbg.png 1x,
+            https://fienta.com/cf/img/?width=1070&amp;dpr=2&amp;format=webp&amp;gcs=true&amp;file=/org/21419/zLP8kLaHHvPjhbg.png 2x" type="image/webp">
+        <source media="(max-width: 991px)" srcset="https://fienta.com/cf/img/?width=690&amp;dpr=1&amp;format=jpeg&amp;gcs=true&amp;file=/org/21419/zLP8kLaHHvPjhbg.png 1x,
+            https://fienta.com/cf/img/?width=690&amp;dpr=2&amp;format=jpeg&amp;gcs=true&amp;file=/org/21419/zLP8kLaHHvPjhbg.png 2x" type="image/jpeg">
+        <source srcset="https://fienta.com/cf/img/?width=1070&amp;dpr=1&amp;format=jpeg&amp;gcs=true&amp;file=/org/21419/zLP8kLaHHvPjhbg.png 1x,
+            https://fienta.com/cf/img/?width=1070&amp;dpr=2&amp;format=jpeg&amp;gcs=true&amp;file=/org/21419/zLP8kLaHHvPjhbg.png 2x" type="image/jpeg">
+        <img id="hero-image" src="https://fienta.com/cf/img/?width=1070&amp;dpr=1&amp;format=jpeg&amp;gcs=true&amp;file=/org/21419/zLP8kLaHHvPjhbg.png" class="w-100 img-fluid user-drag-none" width="1070" height="535" alt="" aria-hidden="true">
+    </picture>
+
+
+            <div class="card-body py-6">
+
+                <div id="event-header">
+                    <a id="title"></a>
+                    
+                                            <h1 class="mb-3">Stand-up Comedy in English • Sasha Dolgopolov in Frankfurt</h1>
+                    
+                    <div class="d-flex flex-wrap mb-5 ms-n3">
+                                                    <a class="series-item flex-grow-1 px-3 py-3 ms-3 mt-3" href="https://fienta.com/sasha-dolgopolov-eng-156580?utm_source=fienta-search#title">
+                                <p class="text-body">Mon, 26 Jan</p>
+                                                                    <p class="text-body">
+                                        20:00
+                                    </p>
+                                                                                                    <p class="text-body text-small mt-2">Kulturhaus Frankfurt, Frankfurt am Main</p>
+                                                                                                
+                                                                                                
+                                                            </a>
+                                                    <a class="series-item flex-grow-1 px-3 py-3 ms-3 mt-3" href="https://fienta.com/sasha-dolgopolov-eng-156581?utm_source=fienta-search#title">
+                                <p class="text-body">Tue, 27 Jan</p>
+                                                                    <p class="text-body">
+                                        19:00
+                                    </p>
+                                                                                                    <p class="text-body text-small mt-2">Theater am Olgaeck, Stuttgart</p>
+                                                                                                
+                                                                                                
+                                                            </a>
+                                                    <a class="series-item flex-grow-1 px-3 py-3 ms-3 mt-3" href="https://fienta.com/sasha-dolgopolov-eng-156584?utm_source=fienta-search#title">
+                                <p class="text-body">Wed, 28 Jan</p>
+                                                                    <p class="text-body">
+                                        20:00
+                                    </p>
+                                                                                                    <p class="text-body text-small mt-2">Madrid Comedy Lab</p>
+                                                                                                
+                                                                                                
+                                                            </a>
+                                                    <a class="series-item flex-grow-1 px-3 py-3 ms-3 mt-3" href="https://fienta.com/sasha-dolgopolov-eng-156582?utm_source=fienta-search#title">
+                                <p class="text-body">Fri, 30 Jan</p>
+                                                                    <p class="text-body">
+                                        20:00
+                                    </p>
+                                                                                                    <p class="text-body text-small mt-2">Secret Comedy Club Barcelona</p>
+                                                                                                
+                                                                                                    <span class="badge badge-white">Sold out</span>
+                                                                
+                                                            </a>
+                                                    <a class="series-item flex-grow-1 px-3 py-3 ms-3 mt-3" href="https://fienta.com/sasha-dolgopolov-eng-156583?utm_source=fienta-search#title">
+                                <p class="text-body">Sat, 31 Jan</p>
+                                                                    <p class="text-body">
+                                        20:00
+                                    </p>
+                                                                                                    <p class="text-body text-small mt-2">La Comedia stand up bar, València</p>
+                                                                                                
+                                                                                                
+                                                            </a>
+                                                    <a class="series-item flex-grow-1 px-3 py-3 ms-3 mt-3" href="https://fienta.com/sasha-dolgopolov-eng-156585?utm_source=fienta-search#title">
+                                <p class="text-body">Mon, 2 Feb</p>
+                                                                    <p class="text-body">
+                                        20:00
+                                    </p>
+                                                                                                    <p class="text-body text-small mt-2">Xafarix Bar, Lisboa</p>
+                                                                                                
+                                                                                                
+                                                            </a>
+                                                    <a class="series-item flex-grow-1 px-3 py-3 ms-3 mt-3" href="https://fienta.com/sasha-dolgopolov-eng-156586?utm_source=fienta-search#title">
+                                <p class="text-body">Tue, 3 Feb</p>
+                                                                    <p class="text-body">
+                                        20:00
+                                    </p>
+                                                                                                    <p class="text-body text-small mt-2">Nope Bar, Porto</p>
+                                                                                                
+                                                                                                
+                                                            </a>
+                                                    <a class="series-item flex-grow-1 px-3 py-3 ms-3 mt-3" style="display: none;" href="https://fienta.com/sasha-dolgopolov-eng-156588?utm_source=fienta-search#title">
+                                <p class="text-body">Wed, 4 Feb</p>
+                                                                    <p class="text-body">
+                                        20:00
+                                    </p>
+                                                                                                    <p class="text-body text-small mt-2">The Perseus Feather, Ixelles</p>
+                                                                                                
+                                                                                                
+                                                            </a>
+                                                    <a class="series-item flex-grow-1 px-3 py-3 ms-3 mt-3" style="display: none;" href="https://fienta.com/sasha-dolgopolov-eng-156591?utm_source=fienta-search#title">
+                                <p class="text-body">Fri, 6 Feb</p>
+                                                                    <p class="text-body">
+                                        20:00
+                                    </p>
+                                                                                                    <p class="text-body text-small mt-2">Southend Comedy Club, Amsterdam</p>
+                                                                                                
+                                                                                                
+                                                            </a>
+                                                    <a class="series-item flex-grow-1 px-3 py-3 ms-3 mt-3" style="display: none;" href="https://fienta.com/sasha-dolgopolov-eng-156761?utm_source=fienta-search#title">
+                                <p class="text-body">Tue, 10 Feb</p>
+                                                                    <p class="text-body">
+                                        19:30
+                                    </p>
+                                                                                                    <p class="text-body text-small mt-2">Carlitos Comedy Club, Luxembourg</p>
+                                                                                                
+                                                                                                
+                                                            </a>
+                                                    <a class="series-item flex-grow-1 px-3 py-3 ms-3 mt-3" style="display: none;" href="https://fienta.com/sasha-dolgopolov-eng-156593?utm_source=fienta-search#title">
+                                <p class="text-body">Wed, 11 Feb</p>
+                                                                    <p class="text-body">
+                                        19:00
+                                    </p>
+                                                                                                    <p class="text-body text-small mt-2">The Beast Comedy club, Basel</p>
+                                                                                                
+                                                                                                
+                                                            </a>
+                                                    <a class="series-item flex-grow-1 px-3 py-3 ms-3 mt-3" style="display: none;" href="https://fienta.com/sasha-dolgopolov-eng-156595?utm_source=fienta-search#title">
+                                <p class="text-body">Thu, 12 Feb</p>
+                                                                    <p class="text-body">
+                                        20:00
+                                    </p>
+                                                                                                    <p class="text-body text-small mt-2">ComedyHaus, Zürich</p>
+                                                                                                
+                                                                                                
+                                                            </a>
+                                                    <a class="series-item flex-grow-1 px-3 py-3 ms-3 mt-3" style="display: none;" href="https://fienta.com/sasha-dolgopolov-eng-156596?utm_source=fienta-search#title">
+                                <p class="text-body">Sat, 14 Feb</p>
+                                                                    <p class="text-body">
+                                        19:00
+                                    </p>
+                                                                                                    <p class="text-body text-small mt-2">Acting International, Paris</p>
+                                                                                                
+                                                                                                
+                                                            </a>
+                                                    <a class="series-item flex-grow-1 px-3 py-3 ms-3 mt-3" style="display: none;" href="https://fienta.com/sasha-dolgopolov-eng-156604?utm_source=fienta-search#title">
+                                <p class="text-body">Tue, 17 Feb</p>
+                                                                    <p class="text-body">
+                                        20:00
+                                    </p>
+                                                                                                    <p class="text-body text-small mt-2">Casa delle associazioni del Baraccano, Bologna</p>
+                                                                                                
+                                                                                                
+                                                            </a>
+                                                    <a class="series-item flex-grow-1 px-3 py-3 ms-3 mt-3" style="display: none;" href="https://fienta.com/sasha-dolgopolov-eng-156606?utm_source=fienta-search#title">
+                                <p class="text-body">Wed, 18 Feb</p>
+                                                                    <p class="text-body">
+                                        20:00
+                                    </p>
+                                                                                                    <p class="text-body text-small mt-2">Latta - Fermenti e Miscele, Roma</p>
+                                                                                                
+                                                                                                
+                                                            </a>
+                                                    <a class="series-item flex-grow-1 px-3 py-3 ms-3 mt-3" style="display: none;" href="https://fienta.com/sasha-dolgopolov-eng-156607?utm_source=fienta-search#title">
+                                <p class="text-body">Thu, 19 Feb</p>
+                                                                    <p class="text-body">
+                                        20:00
+                                    </p>
+                                                                                                    <p class="text-body text-small mt-2">Slow Mill, Milano</p>
+                                                                                                
+                                                                                                
+                                                            </a>
+                                                    <a class="series-item flex-grow-1 px-3 py-3 ms-3 mt-3" style="display: none;" href="https://fienta.com/sasha-dolgopolov-eng-156609?utm_source=fienta-search#title">
+                                <p class="text-body">Fri, 20 Feb</p>
+                                                                    <p class="text-body">
+                                        19:00
+                                    </p>
+                                                                                                    <p class="text-body text-small mt-2">The Comedy Pub, Wien</p>
+                                                                                                
+                                                                                                
+                                                            </a>
+                                                    <a class="series-item flex-grow-1 px-3 py-3 ms-3 mt-3" style="display: none;" href="https://fienta.com/sasha-dolgopolov-eng-156611?utm_source=fienta-search#title">
+                                <p class="text-body">Sun, 22 Feb</p>
+                                                                    <p class="text-body">
+                                        18:00
+                                    </p>
+                                                                                                    <p class="text-body text-small mt-2">Kultowy Klub Wędrówki - Wrocławski Klub Eventowy</p>
+                                                                                                
+                                                                                                
+                                                            </a>
+                                                    <a class="series-item flex-grow-1 px-3 py-3 ms-3 mt-3" style="display: none;" href="https://fienta.com/sasha-dolgopolov-eng-156616?utm_source=fienta-search#title">
+                                <p class="text-body">Mon, 23 Feb</p>
+                                                                    <p class="text-body">
+                                        19:00
+                                    </p>
+                                                                                                    <p class="text-body text-small mt-2">107, Gdańsk</p>
+                                                                                                
+                                                                                                
+                                                            </a>
+                                                    <a class="series-item flex-grow-1 px-3 py-3 ms-3 mt-3" style="display: none;" href="https://fienta.com/sasha-dolgopolov-eng-156618?utm_source=fienta-search#title">
+                                <p class="text-body">Wed, 25 Feb</p>
+                                                                    <p class="text-body">
+                                        19:00
+                                    </p>
+                                                                                                    <p class="text-body text-small mt-2">stand up lokal, Warszawa</p>
+                                                                                                
+                                                                                                
+                                                            </a>
+                                                    <a class="series-item flex-grow-1 px-3 py-3 ms-3 mt-3" style="display: none;" href="https://fienta.com/sasha-dolgopolov-eng-156623?utm_source=fienta-search#title">
+                                <p class="text-body">Fri, 27 Feb</p>
+                                                                    <p class="text-body">
+                                        19:00
+                                    </p>
+                                                                                                    <p class="text-body text-small mt-2">Zaraz Wracam Tu, Kraków</p>
+                                                                                                
+                                                                                                
+                                                            </a>
+                                                    <a class="series-item flex-grow-1 px-3 py-3 ms-3 mt-3" style="display: none;" href="https://fienta.com/sasha-dolgopolov-eng-156706?utm_source=fienta-search#title">
+                                <p class="text-body">Sun, 1 Mar</p>
+                                                                    <p class="text-body">
+                                        19:00
+                                    </p>
+                                                                                                    <p class="text-body text-small mt-2">Gamle Raadhus Scene, Oslo</p>
+                                                                                                
+                                                                                                
+                                                            </a>
+                                                    <a class="series-item flex-grow-1 px-3 py-3 ms-3 mt-3" style="display: none;" href="https://fienta.com/sasha-dolgopolov-eng-156762?utm_source=fienta-search#title">
+                                <p class="text-body">Mon, 2 Mar</p>
+                                                                    <p class="text-body">
+                                        19:30
+                                    </p>
+                                                                                                    <p class="text-body text-small mt-2">The Laugh House Stockholm</p>
+                                                                                                
+                                                                                                
+                                                            </a>
+                                                    <a class="series-item flex-grow-1 px-3 py-3 ms-3 mt-3" style="display: none;" href="https://fienta.com/sasha-dolgopolov-eng-156624?utm_source=fienta-search#title">
+                                <p class="text-body">Wed, 4 Mar</p>
+                                                                    <p class="text-body">
+                                        19:00
+                                    </p>
+                                                                                                    <p class="text-body text-small mt-2">Restaurant Ship Wäiski, Helsinki</p>
+                                                                                                
+                                                                                                
+                                                            </a>
+                                                    <a class="series-item flex-grow-1 px-3 py-3 ms-3 mt-3" style="display: none;" href="https://fienta.com/sasha-dolgopolov-eng-156625?utm_source=fienta-search#title">
+                                <p class="text-body">Thu, 5 Mar</p>
+                                                                    <p class="text-body">
+                                        21:00
+                                    </p>
+                                                                                                    <p class="text-body text-small mt-2">Heldeke!, Tallinn</p>
+                                                                                                
+                                                                                                
+                                                            </a>
+                                                    <a class="series-item flex-grow-1 px-3 py-3 ms-3 mt-3" style="display: none;" href="https://fienta.com/sasha-dolgopolov-eng-156627?utm_source=fienta-search#title">
+                                <p class="text-body">Fri, 6 Mar</p>
+                                                                    <p class="text-body">
+                                        19:00
+                                    </p>
+                                                                                                    <p class="text-body text-small mt-2">Theater-club "Hamlets", Rīga</p>
+                                                                                                
+                                                                                                
+                                                            </a>
+                                                    <a class="series-item flex-grow-1 px-3 py-3 ms-3 mt-3" style="display: none;" href="https://fienta.com/sasha-dolgopolov-eng-156629?utm_source=fienta-search#title">
+                                <p class="text-body">Sat, 7 Mar</p>
+                                                                    <p class="text-body">
+                                        19:00
+                                    </p>
+                                                                                                    <p class="text-body text-small mt-2">STUDIO 23 Vilnius</p>
+                                                                                                
+                                                                                                
+                                                            </a>
+                                                    <a class="series-item flex-grow-1 px-3 py-3 ms-3 mt-3" style="display: none;" href="https://fienta.com/sasha-dolgopolov-eng-164440?utm_source=fienta-search#title">
+                                <p class="text-body">Wed, 18 Mar</p>
+                                                                    <p class="text-body">
+                                        20:00
+                                    </p>
+                                                                                                    <p class="text-body text-small mt-2">Nice N Sleazy, Glasgow</p>
+                                                                                                
+                                                                                                
+                                                            </a>
+                                                    <a class="series-item flex-grow-1 px-3 py-3 ms-3 mt-3" style="display: none;" href="https://fienta.com/sasha-dolgopolov-eng-164443?utm_source=fienta-search#title">
+                                <p class="text-body">Thu, 19 Mar</p>
+                                                                    <p class="text-body">
+                                        19:00
+                                    </p>
+                                                                                                    <p class="text-body text-small mt-2">Craic Den Comedy Club, Dublin 8</p>
+                                                                                                
+                                                                                                
+                                                            </a>
+                                                    <a class="series-item flex-grow-1 px-3 py-3 ms-3 mt-3" style="display: none;" href="https://fienta.com/sasha-dolgopolov-eng-165641?utm_source=fienta-search#title">
+                                <p class="text-body">Mon, 23 Mar</p>
+                                                                    <p class="text-body">
+                                        19:30
+                                    </p>
+                                                                                                    <p class="text-body text-small mt-2">Parabolic Lázárus Brewery, Budapest</p>
+                                                                                                
+                                                                                                
+                                                            </a>
+                                                    <a class="series-item flex-grow-1 px-3 py-3 ms-3 mt-3" style="display: none;" href="https://fienta.com/sasha-dolgopolov-eng-165639?utm_source=fienta-search#title">
+                                <p class="text-body">Tue, 24 Mar</p>
+                                                                    <p class="text-body">
+                                        19:30
+                                    </p>
+                                                                                                    <p class="text-body text-small mt-2">Teatro Colorato, Bratislava</p>
+                                                                                                
+                                                                                                
+                                                            </a>
+                                                    <a class="series-item flex-grow-1 px-3 py-3 ms-3 mt-3" style="display: none;" href="https://fienta.com/sasha-dolgopolov-eng-165628?utm_source=fienta-search#title">
+                                <p class="text-body">Thu, 26 Mar</p>
+                                                                    <p class="text-body">
+                                        19:30
+                                    </p>
+                                                                                                    <p class="text-body text-small mt-2">NarrenCastl - Café &amp; Bar, Salzburg</p>
+                                                                                                
+                                                                                                
+                                                            </a>
+                                                    <a class="series-item flex-grow-1 px-3 py-3 ms-3 mt-3" style="display: none;" href="https://fienta.com/sasha-dolgopolov-eng-165615?utm_source=fienta-search#title">
+                                <p class="text-body">Fri, 27 Mar</p>
+                                                                    <p class="text-body">
+                                        21:00
+                                    </p>
+                                                                                                    <p class="text-body text-small mt-2">Crazy Nate’s OG/Wöhrd, Nürnberg</p>
+                                                                                                
+                                                                                                
+                                                            </a>
+                                                    <a class="series-item flex-grow-1 px-3 py-3 ms-3 mt-3" style="display: none;" href="https://fienta.com/sasha-dolgopolov-eng-165636?utm_source=fienta-search#title">
+                                <p class="text-body">Sat, 28 Mar</p>
+                                                                    <p class="text-body">
+                                        18:00
+                                    </p>
+                                                                                                    <p class="text-body text-small mt-2">Cave 54, Heidelberg</p>
+                                                                                                
+                                                                                                
+                                                            </a>
+                                                    <a class="series-item flex-grow-1 px-3 py-3 ms-3 mt-3" style="display: none;" href="https://fienta.com/sasha-dolgopolov-eng-165602?utm_source=fienta-search#title">
+                                <p class="text-body">Mon, 30 Mar</p>
+                                                                    <p class="text-body">
+                                        19:30
+                                    </p>
+                                                                                                    <p class="text-body text-small mt-2">Karakas, Berlin</p>
+                                                                                                
+                                                                                                
+                                                            </a>
+                                                    <a class="series-item flex-grow-1 px-3 py-3 ms-3 mt-3" style="display: none;" href="https://fienta.com/sasha-dolgopolov-eng-165614?utm_source=fienta-search#title">
+                                <p class="text-body">Tue, 31 Mar</p>
+                                                                    <p class="text-body">
+                                        19:30
+                                    </p>
+                                                                                                    <p class="text-body text-small mt-2">Karakas, Berlin</p>
+                                                                                                
+                                                                                                
+                                                            </a>
+                        
+                                                    <a id="btn-series-items-more" class="series-item flex-grow-1 px-3 py-3 ms-3 mt-3" href="#">
+                                <p class="text-body">+ See more</p>
+                            </a>
+                        
+                    </div>
+
+                    
+                    
+                </div>
+
+                
+                                    <div class="markdown"><p>🎭STAND-UP COMEDY IN ENGLISH 🎭</p>
+<p>finally! a new english language comedy show from alternative comedian sasha dolgopolov!</p>
+<p>if in her previous show sasha explored the theme of stress, this time the focus is on its opposite - rest, slowing down, and calm.</p>
+<p><em>how do you take care of yourself when the world around you is falling apart? how do you balance survival and rest? how do you keep from exploding under pressure? how do you stay calm when your life is unstable? how do you accept yourself when the world around you doesn’t?</em></p>
+<p>sasha asks these questions (to herself and to us) searching for answers and inviting us to join this intriguing and hilarious exploration, while also talking about migration, gender, sexuality, politics, language, growing up, and of course… fruit flies!<br><br>The show will be held entirely in English.</p>
+<p><strong>⭐️ Press Reviews ⭐️</strong></p>
+<p><em>“One of the most famous stand-up comedians in Russia, who often mocks the authorities”</em> - Forbes<br><em>“Dolgopolov certainly does mix themes of God, atheism and profanity – often hilariously”</em> - the Independent<br><em>“One of the most famous representatives of the stand-up genre which is gaining popularity in Russia”</em> - Euronews</p>
+<p><strong>🦄 Audience Reviews: 🦄</strong></p>
+<p><em>"I'm and English and German speaker and I just found your stand-up!! I'm obsessed!! I'm jealous of everyone who can understand you in your native language but know that your humor translates well! &lt;3"</em></p>
+<p><em>"I am sure most comedians envy you for having so much shitty life experience which you can turn into hilarious material."</em></p>
+<p><em>"Somehow even after switching to English, Sasha kept her unique style of delivery and wordplay. Absolutely loved the show, please support Sasha and go see her live if you can."</em></p>
+<p><em>"you're my boyfriends favorite comedian (he saw you wayy back in moscow) and your first english special is part of how we started dating (he posted a story that said he doesnt go on dates with anyone who hasn't seen your comedy special, and well.. here we are)."</em></p>
+<p><em>"Well Dolgopolov is a freak for sure"</em></p>
+
+<p><strong>🌈 About Sasha: </strong></p>
+<p>Sasha(Over 10 mln views on youtube/insta/tiktok ), a queer alternative political comedian from Russia who immigrated when the war in Ukraine started, has spent a decade honing her stand-up craft. She's evolved into one of the most provocative, recognisable, original, and significant Russian-speaking comedians.</p>
+<p>Frequently lauded by opposition media and colleagues, she's considered one of the best Russian-speaking comedians in modern history. Now embarking on her second English tour with a completely new program, Sasha is embracing a new chapter in life and career.</p>
+<p>Over the last decade, she's delivered hundreds of solo shows, open mics, festivals, contests across more than 24 countries (not an easy task with this type of passport). Sasha has successfully filmed seven one-hour comedy specials (including one in english) amassing over 14 million views on YouTube collectively.</p>
+<p>Despite public attacks from Russian propagandist media, she persists in addressing topics like religion, authoritarianism, gender non-conformity, and anti-war stances.</p>
+<p>This unique comedian is now ready to captivate an English-speaking audience once again!</p>
+<p>🎟️ To keep show open to everyone we're offering tickets as low as 15 eur and with maximum to whatever you want. all proceeds of the show go directly to artist's team after all expenses</p>
+<iframe width="250" height="516" src="https://www.youtube.com/embed/Zwo-7g7ufac" frameborder="0"></iframe><iframe width="250" height="516" src="https://www.youtube.com/embed/m9ccBk_YtBs" frameborder="0"></iframe><iframe width="250" height="516" src="https://www.youtube.com/embed/bujSDh6bLAs" frameborder="0"></iframe>
+</div>
+                
+            </div>
+
+        </div>
+
+        <div class="card" id="organizer-contacts">
+    <div class="card-body py-6 d-md-flex justify-content-between align-items-start flex-col-gap">
+        <div>
+            
+            <h2 class="mb-4">ALEKSANDR DOLGOPOLOV</h2>
+                        <p class="mb-0">
+                
+                <a href="mailto:info@komiktiv.com">info@komiktiv.com</a>
+            </p>
+        </div>
+                    <a href="https://fienta.com/o/21419" class="btn btn-outline-primary">View all events</a>
+            </div>
+</div>
+
+    </main>
+
+уже берём каждую ссылку из <a> и это наш юрл. но, у некоторых есть много разновидностей одного мероприятия
+и есть кнопка "See more", на которую надо нажать, чтоб прогрузились все
+
+
+теперь такой момент - на результате первой части мы должны получить такой список:
+{
+    cities: {
+        city_name: string;
+        city_id: mongoose.Types.ObjectId;
+        single_date_event_urls: string[]; // тип 1, важно, чтоб без дубликатов
+        multiple_date_event_urls: string[]; // тип 2, важно, чтоб без дубликатов
+    }[];
+    multiple_cities_event_urls: string[]; // тип 3, важно, чтоб без дубликатов
+}
+
+и в провессе парсинга каждого города, надо делать записи в infoText:
+{
+        city_name: string;
+        city_id: mongoose.Types.ObjectId;
+        single_date_events_count: number;
+        multiple_date_events_count: number;
+        multiple_cities_events_count: number;
+}
+
+
+ну и в самом конце первого этапа глобальное количество всех мероприятий каждого типа
+
+давай пока реализуем эту часть, но с 10 городами, оставь список, я туда стрингом запишу их _id 
+я проверю, всё ли в infoText записалось правильно и выведи обычный лог с финальным списком url, что получили
+
+
+
+
+updated:
+вместо few more может быть one more, они тоже ко 2 типу относятся (если, конечно, нет multiple venues)
+также надо вообще исключить те, что в нижнем p имеют "online" (проверить по include)
