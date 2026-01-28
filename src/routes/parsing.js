@@ -11,6 +11,7 @@ router.get('/results/:operationId', ParsingController.getResults);
 router.get('/operations', ParsingController.getOperations);
 router.post('/cleanup', ParsingController.cleanup);
 router.post('/sync-cities-countries', ParsingController.syncCitiesAndCountries);
+router.post('/submit-fienta-html', ParsingController.submitFientaHtml);
 
 export default router;
 

@@ -2,6 +2,8 @@ import OperationsSchema from '../schemas/OperationsSchema';
 import ParsedEventsSchema from '../schemas/ParsedEventsSchema';
 import CitiesSchema from '../schemas/CitiesSchema';
 import CountriesSchema from '../schemas/CountriesSchema';
+import FientaPagesSchema from '../schemas/FientaPagesSchema';
+import CryptoServices from '../services/CryptoServices';
 import { OPERATION_STATUSES, OPERATION_TYPES } from '../helpers/constants';
 import parseFienta from '../operations/parseFienta';
 import parseEventim from '../operations/parseEventim';
@@ -380,6 +382,47 @@ class ParsingController {
       });
     } catch (error) {
       logger.error(`Error syncing cities and countries: ${error.message || error}`);
+      next(error);
+    }
+  };
+
+  // POST /parsing/submit-fienta-html
+  static submitFientaHtml = async (req, res, next) => {
+    try {
+      const { html: data } = req.body;
+
+      if (!data || typeof data !== 'string') {
+        return res.status(400).json({
+          status: 'error',
+          message: 'Data content is required and must be a string',
+        });
+      }
+      
+      // Проверяем, что это валидный JSON
+      try {
+        JSON.parse(data);
+      } catch (e) {
+        return res.status(400).json({
+          status: 'error',
+          message: 'Data must be a valid JSON string',
+        });
+      }
+      
+      const page = new FientaPagesSchema({
+        data,
+        is_processed: false,
+      });
+      await page.save();
+
+      logger.info(`Fienta page saved with id: ${page._id}`);
+
+      res.json({
+        status: 'ok',
+        message: 'Page saved successfully',
+        pageId: page._id.toString(),
+      });
+    } catch (error) {
+      logger.error(`Error saving Fienta page: ${error.message || error}`);
       next(error);
     }
   };
