@@ -1,6 +1,6 @@
 # Nomad Second Server - Parsing Service
 
-Второй сервер для парсинга событий. Выполняет парсинг событий с внешних источников (Fienta, Eventim, Kontramarka) и сохраняет результаты в базу данных.
+Второй сервер для парсинга событий. Выполняет парсинг событий с внешних источников (Fienta, Eventim, Kontramarka, Ticketmaster) и сохраняет результаты в базу данных.
 
 ## Быстрый старт
 
@@ -59,19 +59,20 @@ yarn prod
 Все эндпоинты требуют заголовок `X-API-Key` с правильным API ключом.
 
 ### POST /parsing/create
-Создает операцию парсинга и запускает скрипт парсинга.
+Создает операцию парсинга и запускает скрипт парсинга (ручной запуск).
 
 **Тело запроса:**
 ```json
 {
-  "type": "parsingEventsFromFienta",
+  "type": "parsingEventsFromTicketmaster",
   "meta": {
-    "cities": [...],
-    "countries": [...],
-    "categories": [...]
+    "countryCode": "PL",
+    "specialization": "Event"
   }
 }
 ```
+
+Типы: `parsingEventsFromFienta`, `parsingEventsFromEventim`, `parsingEventsFromKontramarka`, `parsingEventsFromTicketmaster`.
 
 **Ответ:**
 ```json
@@ -99,7 +100,7 @@ yarn prod
 Возвращает **последнюю** операцию указанного типа, ещё не взятую (is_taken: false), и её мероприятия с пагинацией. После запроса эта операция помечается как is_taken: true.
 
 **Query параметры:**
-- `type` (обязательно) — тип операции (parsingEventsFromFienta, parsingEventsFromEventim, parsingEventsFromKontramarka)
+- `type` (обязательно) — тип операции (`parsingEventsFromFienta`, `parsingEventsFromEventim`, `parsingEventsFromKontramarka`, `parsingEventsFromTicketmaster`)
 - `page` (опционально, по умолчанию 1) — номер страницы по **событиям**
 - `per_page` (опционально, по умолчанию 20, макс. 100) — количество **событий** на странице
 
@@ -221,15 +222,23 @@ GET /parsing/operations?type=parsingEventsFromFienta&page=1&per_page=20
 - Если скрипт упадет - уже сохраненные батчи останутся в БД
 - Операции имеют статусы: `pending`, `processing`, `success`, `error`
 
-## Автоматический парсинг (Cron Jobs)
+## Запуск парсинга
 
-Сервер автоматически запускает парсинг по расписанию:
+Парсинг запускается **двумя способами**:
 
-- **Понедельник 02:00 UTC (05:00 MSK)** - Kontramarka
-- **Среда 02:00 UTC (05:00 MSK)** - Fienta
-- **Пятница 02:00 UTC (05:00 MSK)** - Eventim
+1. **Cron** — автоматически по расписанию
+2. **API** — `POST /parsing/create` для ручного/тестового запуска
 
-Кроны создают операции автоматически и запускают парсинг. Города загружаются из БД второго сервера (нужно загрузить дамп городов из основного сервера).
+### Cron (UTC)
+
+- **Понедельник 02:00** — Kontramarka
+- **Среда 02:00** — Eventim
+- **Пятница 02:00** — Fienta
+- **Воскресенье 02:00** — Ticketmaster (PL)
+
+Основной сервер **забирает результаты** через `GET /parsing/operations`.
+
+Документация по Ticketmaster: [docs/ticketmaster.md](./docs/ticketmaster.md)
 
 ## Синхронизация данных
 

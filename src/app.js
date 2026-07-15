@@ -6,8 +6,8 @@ import cors from 'cors';
 import indexRouter from './routes';
 import mongooseConnect from './helpers/mongooseConnect';
 import { MAX_FIELDS_SIZE_MB } from './helpers/constants';
-import setupCron from './helpers/cron';
 import { createLoggerWithSource } from './helpers/logger';
+import setupCron from './helpers/cron';
 
 const logger = createLoggerWithSource('APP');
 

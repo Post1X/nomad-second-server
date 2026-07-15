@@ -5,9 +5,8 @@ import CountriesSchema from '../schemas/CountriesSchema';
 import FientaPagesSchema from '../schemas/FientaPagesSchema';
 import CryptoServices from '../services/CryptoServices';
 import { OPERATION_STATUSES, OPERATION_TYPES } from '../helpers/constants';
-import parseFienta from '../operations/parseFienta';
-import parseEventim from '../operations/parseEventim';
-import parseKontramarka from '../operations/parseKontramarka';
+import startParsingOperation from '../helpers/startParsingOperation';
+
 import { createLoggerWithSource } from '../helpers/logger';
 
 const logger = createLoggerWithSource('PARSING_CONTROLLER');
@@ -25,53 +24,11 @@ class ParsingController {
         });
       }
 
-      const operation = new OperationsSchema({
-        type,
-        status: OPERATION_STATUSES.pending,
-        statistics: '',
-        errorText: '',
-        infoText: 'Operation created, starting parsing...',
-        is_processed: false,
-      });
-      await operation.save();
-
-      setImmediate(async () => {
-        try {
-          await OperationsSchema.findByIdAndUpdate(operation._id, {
-            status: OPERATION_STATUSES.processing,
-            infoText: 'Parsing started...',
-          });
-
-          let parseFunction;
-          switch (type) {
-            case OPERATION_TYPES.parsingEventsFromFienta:
-              parseFunction = parseFienta;
-              break;
-            case OPERATION_TYPES.parsingEventsFromEventim:
-              parseFunction = parseEventim;
-              break;
-            case OPERATION_TYPES.parsingEventsFromKontramarka:
-              parseFunction = parseKontramarka;
-              break;
-            default:
-              throw new Error(`Unknown parser type: ${type}`);
-          }
-
-          await parseFunction({ meta, operationId: operation._id });
-
-        } catch (error) {
-          logger.error(`Error in parsing operation ${operation._id}: ${error.message || error}`);
-          await OperationsSchema.findByIdAndUpdate(operation._id, {
-            status: OPERATION_STATUSES.error,
-            errorText: error.message || 'Unknown error occurred',
-            finish_time: new Date(),
-          });
-        }
-      });
+      const operationId = await startParsingOperation(type, meta || {});
 
       res.json({
         status: 'ok',
-        operationId: operation._id.toString(),
+        operationId: operationId.toString(),
         message: 'Operation created and started',
       });
     } catch (error) {

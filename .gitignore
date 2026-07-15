@@ -10,4 +10,4 @@ eventim.json.gz
 *.nml
 tmp/
 /bash_scripts/
-
+/docs

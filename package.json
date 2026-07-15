@@ -7,7 +7,8 @@
     "dev": "nodemon --exec babel-node -r dotenv/config src/bin/www",
     "clean": "rm -rf dist",
     "build": "yarn clean && babel ./src --out-dir dist --copy-files",
-    "prod": "yarn build && node -r dotenv/config ./dist/bin/www"
+    "prod": "yarn build && node -r dotenv/config ./dist/bin/www",
+    "parse:ticketmaster": "babel-node -r dotenv/config scripts/runTicketmasterParsing.js"
   },
   "dependencies": {
     "cheerio": "^1.0.0",

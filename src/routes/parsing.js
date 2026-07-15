@@ -14,4 +14,3 @@ router.post('/sync-cities-countries', ParsingController.syncCitiesAndCountries);
 router.post('/submit-fienta-html', ParsingController.submitFientaHtml);
 
 export default router;
-

@@ -22,12 +22,19 @@ const normalize = (str = '') => str
 
 const cityTokens = (name = '') => name.split('|').map((s) => normalize(s)).filter(Boolean);
 
+/** Проверяет, что token встречается в text целиком (token может быть из нескольких слов, напр. "new york"). Границы — явные разделители, не \\b, чтобы кириллица не матчилась по подстроке (Бар в Барселона). */
+const containsWholeWord = (text, token) => {
+  if (!text || !token) return false;
+  const escaped = token.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return new RegExp(`(^|[\\s,.\\-•;])${escaped}([\\s,.\\-•;]|$)`, 'i').test(text);
+};
+
 const findCity = (cities, targetName = '') => {
   const target = normalize(targetName);
   if (!target) return null;
   return cities.find((c) => {
     const tokens = cityTokens(c.name);
-    return tokens.some((tok) => target.includes(tok) || tok.includes(target));
+    return tokens.some((tok) => containsWholeWord(target, tok));
   }) || null;
 };
 
@@ -57,6 +64,34 @@ const buildCitySlug = (name = '') => {
   const parts = name.split('|').map((s) => s.trim()).filter(Boolean);
   const prefer = parts[1] || parts[0] || name;
   return encodeURIComponent(prefer.toLowerCase().replace(/\s+/g, '-'));
+};
+
+/** Форматирует последовательность чисел дат: 3+ подряд — через тире */
+const formatDateRange = (dateNumbers) => {
+  if (!dateNumbers || dateNumbers.length === 0) return '';
+  if (dateNumbers.length === 1) return dateNumbers[0];
+  const numbers = dateNumbers.map(n => parseInt(n, 10)).filter(n => !isNaN(n));
+  if (numbers.length === 0) return dateNumbers.join(', ');
+  const result = [];
+  let start = numbers[0];
+  let end = numbers[0];
+  for (let i = 1; i < numbers.length; i++) {
+    if (numbers[i] === end + 1) {
+      end = numbers[i];
+    } else {
+      const count = end - start + 1;
+      if (count === 1) result.push(start.toString());
+      else if (count === 2) { result.push(start.toString()); result.push(end.toString()); }
+      else result.push(`${start}–${end}`);
+      start = numbers[i];
+      end = numbers[i];
+    }
+  }
+  const count = end - start + 1;
+  if (count === 1) result.push(start.toString());
+  else if (count === 2) { result.push(start.toString()); result.push(end.toString()); }
+  else result.push(`${start}–${end}`);
+  return result.join(', ');
 };
 
 /** Форматирует массив дат в текстовое поле: "12–19 февраля 2025", "12, 16, 22 февраля" или "12 декабря 2024, 15 января 2025" */
@@ -94,7 +129,8 @@ const formatHoldingDate = (dateArray) => {
     } else if (arr.length === 2) {
       parts.push(`${moment(arr[0]).format('D')}–${moment(arr[1]).format('D')} ${m.format('MMMM' + withYear)}`);
     } else {
-      parts.push(arr.map((d) => moment(d).format('D')).join(', ') + ' ' + m.format('MMMM' + withYear));
+      const formattedDates = formatDateRange(arr.map((d) => moment(d).format('D')));
+      parts.push(formattedDates + ' ' + m.format('MMMM' + withYear));
     }
   }
   const result = parts.join(', ');
