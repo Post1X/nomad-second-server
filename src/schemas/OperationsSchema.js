@@ -41,9 +41,15 @@ const OperationsSchema = new mongoose.Schema({
     type: Boolean,
     default: false,
   },
+  taken_at: {
+    type: Date,
+    required: false,
+  },
 }, {
   timestamps: true,
 });
+
+OperationsSchema.index({ is_taken: 1, taken_at: 1 });
 
 const Operations = mongoose.model('Operations', OperationsSchema);
 

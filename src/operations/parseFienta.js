@@ -4,9 +4,11 @@ import StealthPlugin from 'puppeteer-extra-plugin-stealth';
 import OperationsSchema from '../schemas/OperationsSchema';
 import CitiesSchema from '../schemas/CitiesSchema';
 import FientaPagesSchema from '../schemas/FientaPagesSchema';
-import ParsedEventsSchema from '../schemas/ParsedEventsSchema';
 import { EVENT_SOURCE } from '../helpers/constants';
 import { createLoggerWithSource } from '../helpers/logger';
+import saveProcessedEvents from '../helpers/saveProcessedEvents';
+import { processParsedEvents } from '../services/ProcessParsedEventsServices';
+import ParsedEventsSchema from '../schemas/ParsedEventsSchema';
 
 const logger = createLoggerWithSource('PARSE_FIENTA');
 
@@ -1061,11 +1063,13 @@ async function parseFienta({ meta, operationId }) {
     // Сохранение мероприятий в базу данных
     if (allEvents.length > 0) {
       await logProgress(operationId, `Saving ${allEvents.length} events to database...`);
-      const BATCH_SIZE = 10;
 
       try {
-        for (let i = 0; i < allEvents.length; i += BATCH_SIZE) {
-          const batch = allEvents.slice(i, i + BATCH_SIZE);
+        const { events: processed } = await processParsedEvents(allEvents, EVENT_SOURCE.fienta);
+        const BATCH_SIZE = 10;
+
+        for (let i = 0; i < processed.length; i += BATCH_SIZE) {
+          const batch = processed.slice(i, i + BATCH_SIZE);
           const batchNumber = Math.floor(i / BATCH_SIZE) + 1;
 
           await ParsedEventsSchema.insertMany(
@@ -1078,12 +1082,12 @@ async function parseFienta({ meta, operationId }) {
 
           const operation = await OperationsSchema.findById(operationId);
           await OperationsSchema.findByIdAndUpdate(operationId, {
-            infoText: `${operation?.infoText || ''}\nОбработано ${i + batch.length} из ${allEvents.length} событий. Батч ${batchNumber} из ${Math.ceil(allEvents.length / BATCH_SIZE)}`,
+            infoText: `${operation?.infoText || ''}\nОбработано ${i + batch.length} из ${processed.length} событий. Батч ${batchNumber} из ${Math.ceil(processed.length / BATCH_SIZE)}`,
           });
         }
 
-        infoLines.push(`Создано и сохранено мероприятий: ${allEvents.length}`);
-        await logProgress(operationId, `Successfully saved ${allEvents.length} events`);
+        infoLines.push(`Создано и сохранено мероприятий: ${processed.length} (raw ${allEvents.length})`);
+        await logProgress(operationId, `Successfully saved ${processed.length} events`);
       } catch (saveError) {
         const saveErrMsg = `Error saving events: ${saveError.message}`;
         errorTexts.push(saveErrMsg);

@@ -4,6 +4,7 @@ import parseFienta from '../operations/parseFienta';
 import parseEventim from '../operations/parseEventim';
 import parseKontramarka from '../operations/parseKontramarka';
 import parseTicketmaster from '../operations/parseTicketmaster';
+import parseIsraelinfo from '../operations/parseIsraelinfo';
 import { createLoggerWithSource } from './logger';
 
 const logger = createLoggerWithSource('START_PARSING');
@@ -13,6 +14,7 @@ const PARSERS = {
   [OPERATION_TYPES.parsingEventsFromEventim]: parseEventim,
   [OPERATION_TYPES.parsingEventsFromKontramarka]: parseKontramarka,
   [OPERATION_TYPES.parsingEventsFromTicketmaster]: parseTicketmaster,
+  [OPERATION_TYPES.parsingEventsFromIsraelinfo]: parseIsraelinfo,
 };
 
 export async function startParsingOperation(type, meta = {}) {

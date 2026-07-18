@@ -10,9 +10,9 @@ import { promisify } from 'util';
 import { URL } from 'url';
 import CitiesSchema from '../schemas/CitiesSchema';
 import OperationsSchema from '../schemas/OperationsSchema';
-import ParsedEventsSchema from '../schemas/ParsedEventsSchema';
 import { EVENT_SOURCE } from '../helpers/constants';
 import { createLoggerWithSource } from '../helpers/logger';
+import saveProcessedEvents from '../helpers/saveProcessedEvents';
 
 const logger = createLoggerWithSource('PARSE_EVENTIM');
 
@@ -431,10 +431,9 @@ async function parseEventim({ meta, operationId }) {
         const resolvedCountryId = countryId || matchedCity?.country_id || null;
 
         if (!resolvedCityId || !resolvedCountryId) {
-          const skipMsg = `Skip event "${event.eventName || series.esName}" – city/country id missing; pass meta.cityId/meta.countryId or ensure city exists in DB. [DEBUG targetCity="${targetCity}" matched="${matchedCity?.name || 'null'}" matchedCityId="${matchedCity?._id || '-'}" matchedCountryId="${matchedCity?.country_id || '-'}" providedCityId="${cityId || '-'}" providedCountryId="${countryId || '-'}"]`;
+          const skipMsg = `Event "${event.eventName || series.esName}" – city/country missing (targetCity="${targetCity}"); saving without city.`;
           infoTexts.push(skipMsg);
           await logProgress(operationId, `INFO: ${skipMsg}`);
-          continue;
         }
 
         const newEvent = {
@@ -442,8 +441,10 @@ async function parseEventim({ meta, operationId }) {
           description: series.esText || event.eventName || '',
           specialization: 'Event',
           admin_id: adminId,
-          country_id: resolvedCountryId,
-          city_id: resolvedCityId?.toString ? resolvedCityId.toString() : String(resolvedCityId),
+          country_id: resolvedCountryId || null,
+          city_id: resolvedCityId
+            ? (resolvedCityId?.toString ? resolvedCityId.toString() : String(resolvedCityId))
+            : null,
           operationId: operationId,
           contacts: { website: event.eventLink || series.esLink || '' },
           photos: photoUrl ? [{ full_url: photoUrl }] : [],
@@ -452,6 +453,7 @@ async function parseEventim({ meta, operationId }) {
           date_end: dateStart,
           source: EVENT_SOURCE.eventim,
           address,
+          _mergeDates: dateStart ? [dateStart] : [],
         };
 
         if (typeof event.venueLatitude === 'number' && typeof event.venueLongitude === 'number') {
@@ -489,48 +491,16 @@ async function parseEventim({ meta, operationId }) {
     await logProgress(operationId, `FATAL ERROR: ${errMsg}`);
   }
 
-  const BATCH_SIZE = 10;
   try {
-    for (let i = 0; i < events.length; i += BATCH_SIZE) {
-      const batch = events.slice(i, i + BATCH_SIZE);
-      const batchNumber = Math.floor(i / BATCH_SIZE) + 1;
-      
-      await ParsedEventsSchema.insertMany(
-        batch.map(event => ({
-          operation: operationId,
-          event_data: event,
-          batch_number: batchNumber,
-        }))
-      );
-      
-      const operation = await OperationsSchema.findById(operationId);
-      await OperationsSchema.findByIdAndUpdate(operationId, {
-        infoText: `${operation?.infoText || ''}\nОбработано ${i + batch.length} из ${events.length} событий. Батч ${batchNumber} из ${Math.ceil(events.length / BATCH_SIZE)}`,
-      });
-    }
-    
-    const operation = await OperationsSchema.findById(operationId);
-    const finalInfoText = operation?.infoText || '';
-    const additionalInfo = infoTexts.length > 0 ? `\n${infoTexts.join('\n')}` : '';
-    
-    await OperationsSchema.findByIdAndUpdate(operationId, {
-      status: 'success',
-      finish_time: new Date(),
-      statistics: JSON.stringify({
-        total: events.length,
-        batches: Math.ceil(events.length / BATCH_SIZE),
-        errors: errorTexts.length,
-      }),
-      errorText: errorTexts.join('\n'),
-      infoText: finalInfoText + additionalInfo,
+    await saveProcessedEvents({
+      operationId,
+      events,
+      source: EVENT_SOURCE.eventim,
+      infoTexts,
+      errorTexts,
     });
   } catch (error) {
     logger.error(`Error saving events to database: ${error.message || error}`, error);
-    await OperationsSchema.findByIdAndUpdate(operationId, {
-      status: 'error',
-      errorText: error.message || 'Unknown error while saving events',
-      finish_time: new Date(),
-    });
   }
 }
 

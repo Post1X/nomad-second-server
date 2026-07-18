@@ -3,8 +3,9 @@ import ParsedEventsSchema from '../schemas/ParsedEventsSchema';
 import CitiesSchema from '../schemas/CitiesSchema';
 import CountriesSchema from '../schemas/CountriesSchema';
 import FientaPagesSchema from '../schemas/FientaPagesSchema';
-import CryptoServices from '../services/CryptoServices';
-import { OPERATION_STATUSES, OPERATION_TYPES } from '../helpers/constants';
+import CleanupServices from '../services/CleanupServices';
+import StatsServices from '../services/StatsServices';
+import { OPERATION_TYPES, TAKEN_EVENTS_CLEANUP_DAYS } from '../helpers/constants';
 import startParsingOperation from '../helpers/startParsingOperation';
 
 import { createLoggerWithSource } from '../helpers/logger';
@@ -138,7 +139,9 @@ class ParsingController {
 
       const isLastPage = page >= totalPages;
       if (isLastPage) {
-        await OperationsSchema.findByIdAndUpdate(operation._id, { $set: { is_taken: true } });
+        await OperationsSchema.findByIdAndUpdate(operation._id, {
+          $set: { is_taken: true, taken_at: new Date() },
+        });
       }
 
       const operationData = {
@@ -153,6 +156,7 @@ class ParsingController {
         finish_time: operation.finish_time,
         is_processed: operation.is_processed,
         is_taken: isLastPage,
+        taken_at: isLastPage ? new Date() : operation.taken_at,
       };
 
       res.json({
@@ -172,28 +176,18 @@ class ParsingController {
   // POST /parsing/cleanup
   static cleanup = async (req, res, next) => {
     try {
-      const { days = 30 } = req.body;
+      const days = Number(req.body?.days) > 0
+        ? Number(req.body.days)
+        : TAKEN_EVENTS_CLEANUP_DAYS;
 
-      const cutoffDate = new Date();
-      cutoffDate.setDate(cutoffDate.getDate() - days);
-
-      const processedOperations = await OperationsSchema.find({
-        status: OPERATION_STATUSES.success,
-        is_processed: true,
-        finish_time: { $lt: cutoffDate },
-      }).select('_id');
-
-      const operationIds = processedOperations.map(op => op._id);
-
-      const deleteResult = await ParsedEventsSchema.deleteMany({
-        operation: { $in: operationIds },
-        createdAt: { $lt: cutoffDate },
-      });
+      const result = await CleanupServices.cleanupTakenEvents(days);
 
       res.json({
         status: 'ok',
-        deletedCount: deleteResult.deletedCount,
+        deletedCount: result.deletedEvents,
+        deletedOperations: result.deletedOperations,
         message: 'Cleanup completed',
+        days,
       });
     } catch (error) {
       next(error);
@@ -384,6 +378,18 @@ class ParsingController {
     }
   };
 
+  static getWeeklyStats = async (req, res, next) => {
+    try {
+      const { source, from, to } = req.query;
+      const stats = await StatsServices.getWeeklyStats({ source, from, to });
+      res.json({
+        status: 'ok',
+        ...stats,
+      });
+    } catch (error) {
+      next(error);
+    }
+  };
 }
 
 export default ParsingController;

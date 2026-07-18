@@ -3,11 +3,11 @@ import https from 'https';
 import CitiesSchema from '../schemas/CitiesSchema';
 import CountriesSchema from '../schemas/CountriesSchema';
 import OperationsSchema from '../schemas/OperationsSchema';
-import ParsedEventsSchema from '../schemas/ParsedEventsSchema';
 import { EVENT_SOURCE, TICKETMASTER_COUNTRY_CODES } from '../helpers/constants';
 import { findCountryByIso, resolveTicketmasterCountryCodes } from '../helpers/isoCountryAliases';
 import findCityInDb from '../helpers/cityMatching';
 import { createLoggerWithSource } from '../helpers/logger';
+import saveProcessedEvents from '../helpers/saveProcessedEvents';
 
 const logger = createLoggerWithSource('PARSE_TICKETMASTER');
 
@@ -306,7 +306,6 @@ const parseEventsForCountry = async ({
           skippedNoCity += 1;
           const cityKey = venueCityName || 'Unknown';
           skippedByCity[cityKey] = (skippedByCity[cityKey] || 0) + 1;
-          continue;
         }
 
         if (!dateStart) continue;
@@ -319,8 +318,12 @@ const parseEventsForCountry = async ({
           description: event.info || event.description || event.name,
           specialization,
           admin_id: adminId,
-          country_id: resolvedCountryId?.toString ? resolvedCountryId.toString() : String(resolvedCountryId),
-          city_id: resolvedCityId?.toString ? resolvedCityId.toString() : String(resolvedCityId),
+          country_id: resolvedCountryId
+            ? (resolvedCountryId?.toString ? resolvedCountryId.toString() : String(resolvedCountryId))
+            : null,
+          city_id: resolvedCityId
+            ? (resolvedCityId?.toString ? resolvedCityId.toString() : String(resolvedCityId))
+            : null,
           operationId,
           contacts: { website: event.url || '' },
           photos: imageUrl ? [{ full_url: imageUrl }] : [],
@@ -330,6 +333,7 @@ const parseEventsForCountry = async ({
           source: EVENT_SOURCE.ticketmaster,
           address,
           ticketmaster_id: event.id,
+          _mergeDates: [dateStart],
         };
 
         if (venue.location?.latitude && venue.location?.longitude) {
@@ -452,10 +456,7 @@ async function parseTicketmaster({ meta, operationId }) {
   }
 
   const skippedCitiesOver5 = buildSkippedCitiesSummary(skippedByCity);
-  const statistics = {
-    total: events.length,
-    batches: 0,
-    errors: errorTexts.length,
+  const extraStatistics = {
     countryCodes,
     countriesProcessed,
     parsedByCountry,
@@ -464,41 +465,17 @@ async function parseTicketmaster({ meta, operationId }) {
     skippedCitiesOver5,
   };
 
-  const BATCH_SIZE = 10;
   try {
-    for (let i = 0; i < events.length; i += BATCH_SIZE) {
-      const batch = events.slice(i, i + BATCH_SIZE);
-      const batchNumber = Math.floor(i / BATCH_SIZE) + 1;
-
-      // eslint-disable-next-line no-await-in-loop
-      await ParsedEventsSchema.insertMany(
-        batch.map((event) => ({
-          operation: operationId,
-          event_data: event,
-          batch_number: batchNumber,
-        })),
-      );
-    }
-
-    statistics.batches = Math.ceil(events.length / BATCH_SIZE) || 0;
-
-    const summary = `parsed=${events.length}, countries=${countriesProcessed}, skippedNoCity=${skippedNoCity}`;
-
-    await OperationsSchema.findByIdAndUpdate(operationId, {
-      status: 'success',
-      finish_time: new Date(),
-      statistics: JSON.stringify(statistics),
-      errorText: errorTexts.join('\n'),
-      infoText: summary,
+    await saveProcessedEvents({
+      operationId,
+      events,
+      source: EVENT_SOURCE.ticketmaster,
+      infoTexts: [],
+      errorTexts,
+      extraStatistics,
     });
   } catch (error) {
     logger.error(`Error saving events to database: ${error.message || error}`, error);
-    await OperationsSchema.findByIdAndUpdate(operationId, {
-      status: 'error',
-      errorText: error.message || 'Unknown error while saving events',
-      finish_time: new Date(),
-      statistics: JSON.stringify(statistics),
-    });
   }
 }
 

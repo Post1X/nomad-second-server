@@ -2,9 +2,9 @@ import moment from 'moment';
 import puppeteer from 'puppeteer';
 import CitiesSchema from '../schemas/CitiesSchema';
 import OperationsSchema from '../schemas/OperationsSchema';
-import ParsedEventsSchema from '../schemas/ParsedEventsSchema';
 import { EVENT_SOURCE } from '../helpers/constants';
 import { createLoggerWithSource } from '../helpers/logger';
+import saveProcessedEvents from '../helpers/saveProcessedEvents';
 
 const logger = createLoggerWithSource('PARSE_KONTRAMARKA');
 
@@ -439,41 +439,14 @@ async function parseKontramarka({ meta, operationId }) {
     await logProgress(operationId, `FATAL ERROR: ${errMsg}`);
   }
 
-  const BATCH_SIZE = 10;
-  const eventsToSave = mergedEvents.length ? mergedEvents : mergeDuplicateEvents(allEvents || []);
+  const eventsToSave = mergedEvents.length ? mergedEvents : (allEvents || []);
   try {
-    for (let i = 0; i < eventsToSave.length; i += BATCH_SIZE) {
-      const batch = eventsToSave.slice(i, i + BATCH_SIZE);
-      const batchNumber = Math.floor(i / BATCH_SIZE) + 1;
-      
-      await ParsedEventsSchema.insertMany(
-        batch.map(event => ({
-          operation: operationId,
-          event_data: event,
-          batch_number: batchNumber,
-        }))
-      );
-      
-      const operation = await OperationsSchema.findById(operationId);
-      await OperationsSchema.findByIdAndUpdate(operationId, {
-        infoText: `${operation?.infoText || ''}\nОбработано ${i + batch.length} из ${eventsToSave.length} событий. Батч ${batchNumber} из ${Math.ceil(eventsToSave.length / BATCH_SIZE)}`,
-      });
-    }
-    
-    const operation = await OperationsSchema.findById(operationId);
-    const finalInfoText = operation?.infoText || '';
-    const additionalInfo = infoTexts.length > 0 ? `\n${infoTexts.join('\n')}` : '';
-    
-    await OperationsSchema.findByIdAndUpdate(operationId, {
-      status: 'success',
-      finish_time: new Date(),
-      statistics: JSON.stringify({
-        total: eventsToSave.length,
-        batches: Math.ceil(eventsToSave.length / BATCH_SIZE),
-        errors: errorTexts.length,
-      }),
-      errorText: errorTexts.join('\n'),
-      infoText: finalInfoText + additionalInfo,
+    await saveProcessedEvents({
+      operationId,
+      events: eventsToSave,
+      source: EVENT_SOURCE.kontramarka,
+      infoTexts,
+      errorTexts,
     });
   } catch (error) {
     await OperationsSchema.findByIdAndUpdate(operationId, {

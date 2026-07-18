@@ -3,6 +3,7 @@ export const OPERATION_TYPES = {
   parsingEventsFromFienta: 'parsingEventsFromFienta',
   parsingEventsFromEventim: 'parsingEventsFromEventim',
   parsingEventsFromTicketmaster: 'parsingEventsFromTicketmaster',
+  parsingEventsFromIsraelinfo: 'parsingEventsFromIsraelinfo',
 };
 
 export const OPERATION_STATUSES = {
@@ -18,6 +19,16 @@ export const EVENT_SOURCE = {
   fienta: 'fienta',
   eventim: 'eventim',
   ticketmaster: 'ticketmaster',
+  israelinfo: 'israelinfo',
+};
+
+export const TAKEN_EVENTS_CLEANUP_DAYS = 21;
+
+export const AI_CATEGORY_BATCH_CHARS = 12000;
+
+export const SETTINGS_KEYS = {
+  aiCategoryPrompt: 'ai_category_prompt',
+  categoriesHash: 'categories_hash',
 };
 
 /** ISO 3166-1 alpha-2 — страны с покрытием Ticketmaster Discovery (Discovery Feed docs). */
