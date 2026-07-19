@@ -1,170 +1,221 @@
-import OperationsSchema from '../schemas/OperationsSchema';
+import path from 'path';
+import ParseRunsSchema from '../schemas/ParseRunsSchema';
 import ParsedEventsSchema from '../schemas/ParsedEventsSchema';
 import CitiesSchema from '../schemas/CitiesSchema';
 import CountriesSchema from '../schemas/CountriesSchema';
 import FientaPagesSchema from '../schemas/FientaPagesSchema';
 import CleanupServices from '../services/CleanupServices';
 import StatsServices from '../services/StatsServices';
-import { OPERATION_TYPES, TAKEN_EVENTS_CLEANUP_DAYS } from '../helpers/constants';
-import startParsingOperation from '../helpers/startParsingOperation';
-
+import CityDiscoveryServices from '../services/CityDiscoveryServices';
+import { categorizeBatch } from '../services/CategorizeBatchServices';
+import {
+  EVENT_SOURCE,
+  EXPIRED_EVENTS_CLEANUP_MONTHS,
+  OPERATION_TYPES,
+  SOURCE_BY_OPERATION_TYPE,
+} from '../helpers/constants';
+import startParseRun from '../helpers/startParseRun';
 import { createLoggerWithSource } from '../helpers/logger';
 
 const logger = createLoggerWithSource('PARSING_CONTROLLER');
 
+const resolveSource = (typeOrSource) => {
+  if (!typeOrSource) return null;
+  if (SOURCE_BY_OPERATION_TYPE[typeOrSource]) return SOURCE_BY_OPERATION_TYPE[typeOrSource];
+  if (Object.values(EVENT_SOURCE).includes(typeOrSource) && typeOrSource !== EVENT_SOURCE.nomad) {
+    return typeOrSource;
+  }
+  return null;
+};
+
 class ParsingController {
-  // POST /parsing/create
   static create = async (req, res, next) => {
     try {
-      const { type, meta } = req.body;
+      const { type, source, meta } = req.body;
+      const typeOrSource = type || source;
 
-      if (!Object.values(OPERATION_TYPES).includes(type)) {
+      if (!typeOrSource) {
         return res.status(400).json({
           status: 'error',
-          message: `Invalid operation type. Must be one of: ${Object.values(OPERATION_TYPES).join(', ')}`,
+          message: 'type or source is required',
         });
       }
 
-      const operationId = await startParsingOperation(type, meta || {});
-
-      res.json({
-        status: 'ok',
-        operationId: operationId.toString(),
-        message: 'Operation created and started',
-      });
-    } catch (error) {
-      next(error);
-    }
-  };
-
-  // GET /parsing/results/:operationId
-  static getResults = async (req, res, next) => {
-    try {
-      const { operationId } = req.params;
-
-      const operation = await OperationsSchema.findById(operationId);
-      if (!operation) {
-        return res.status(404).json({
+      const validTypes = Object.values(OPERATION_TYPES);
+      const validSources = Object.values(EVENT_SOURCE).filter((s) => s !== EVENT_SOURCE.nomad);
+      if (!validTypes.includes(typeOrSource) && !validSources.includes(typeOrSource)) {
+        return res.status(400).json({
           status: 'error',
-          message: 'Operation not found',
+          message: `Invalid type/source. Must be one of: ${[...validTypes, ...validSources].join(', ')}`,
         });
       }
 
-      const parsedEvents = await ParsedEventsSchema.find({ operation: operationId })
-        .sort({ batch_number: 1 })
-        .lean();
-
-      const events = parsedEvents.map(pe => pe.event_data);
+      const runId = await startParseRun(typeOrSource, meta || {});
 
       res.json({
         status: 'ok',
-        operation: {
-          _id: operation._id,
-          type: operation.type,
-          status: operation.status,
-          statistics: operation.statistics,
-          errorText: operation.errorText,
-          infoText: operation.infoText,
-          createdAt: operation.createdAt,
-          finish_time: operation.finish_time,
-        },
-        events,
-        totalEvents: events.length,
+        runId: runId.toString(),
+        operationId: runId.toString(),
+        message: 'Parse run created and started',
       });
     } catch (error) {
       next(error);
     }
   };
 
-  // GET /parsing/operations
-  // Возвращает последнюю операцию и её события с пагинацией по page/per_page (пагинация по events).
-  // Query: type (required), page, per_page
-  static getOperations = async (req, res, next) => {
+  static getEvents = async (req, res, next) => {
     try {
       const {
+        source: sourceParam,
         type,
         page: pageParam,
         per_page: perPageParam,
+        updatedSince,
+        onlyPending,
       } = req.query;
 
-      const filter = {
-        is_taken: { $ne: true },
-      };
-
-      if (!type) {
+      const source = resolveSource(sourceParam || type);
+      if (!source) {
         return res.status(400).json({
           status: 'error',
-          message: 'Parameter "type" is required',
+          message: 'Parameter "source" (or legacy "type") is required',
         });
       }
-
-      filter.type = type;
 
       const page = Math.max(1, parseInt(String(pageParam || 1), 10) || 1);
       const per_page = Math.max(1, Math.min(100, parseInt(String(perPageParam || 20), 10) || 20));
 
-      const operation = await OperationsSchema.findOne(filter)
-        .sort({ createdAt: -1 })
-        .lean();
-
-      if (!operation) {
-        return res.json({
-          status: 'ok',
-          operations: [],
-          events: [],
-          totalEvents: 0,
-          totalPages: 0,
-          page,
-          per_page,
-        });
+      const filter = { source };
+      if (updatedSince) {
+        const since = new Date(updatedSince);
+        if (!Number.isNaN(since.getTime())) {
+          filter.updatedAt = { $gte: since };
+        }
+      } else if (String(onlyPending || 'true') !== 'false') {
+        filter.$or = [
+          { exported_at: null },
+          { $expr: { $gt: ['$updatedAt', '$exported_at'] } },
+        ];
       }
 
-      const totalEvents = await ParsedEventsSchema.countDocuments({ operation: operation._id });
-      const totalPages = Math.max(1, Math.ceil(totalEvents / per_page));
+      const totalEvents = await ParsedEventsSchema.countDocuments(filter);
+      const totalPages = Math.max(1, Math.ceil(totalEvents / per_page) || 1);
       const skip = (page - 1) * per_page;
 
-      const parsedEvents = await ParsedEventsSchema.find({ operation: operation._id })
-        .sort({ batch_number: 1 })
+      const docs = await ParsedEventsSchema.find(filter)
+        .sort({ updatedAt: 1 })
         .skip(skip)
         .limit(per_page)
         .lean();
 
-      const events = parsedEvents.map((pe) => {
-        const eventData = pe.event_data;
-        if (eventData && !eventData.operationId) {
-          eventData.operationId = operation._id.toString();
-        }
-        return eventData;
-      });
-
-      const isLastPage = page >= totalPages;
-      if (isLastPage) {
-        await OperationsSchema.findByIdAndUpdate(operation._id, {
-          $set: { is_taken: true, taken_at: new Date() },
-        });
-      }
-
-      const operationData = {
-        _id: operation._id,
-        type: operation.type,
-        status: operation.status,
-        statistics: operation.statistics,
-        errorText: operation.errorText,
-        infoText: operation.infoText,
-        createdAt: operation.createdAt,
-        updatedAt: operation.updatedAt,
-        finish_time: operation.finish_time,
-        is_processed: operation.is_processed,
-        is_taken: isLastPage,
-        taken_at: isLastPage ? new Date() : operation.taken_at,
-      };
+      const events = docs.map((pe) => ({
+        ...(pe.event_data || {}),
+        _parsed_event_id: pe._id.toString(),
+        source: pe.source,
+        updatedAt: pe.updatedAt,
+        fingerprint: pe.fingerprint,
+      }));
 
       res.json({
         status: 'ok',
-        operations: [operationData],
+        source,
         events,
         totalEvents,
         totalPages,
+        page,
+        per_page,
+        ids: docs.map((d) => d._id.toString()),
+      });
+    } catch (error) {
+      next(error);
+    }
+  };
+
+  static ackEvents = async (req, res, next) => {
+    try {
+      const { source: sourceParam, type, ids = [], exportedUntil } = req.body || {};
+      const source = resolveSource(sourceParam || type);
+      if (!source) {
+        return res.status(400).json({
+          status: 'error',
+          message: 'source (or type) is required',
+        });
+      }
+
+      const now = new Date();
+      let result;
+
+      if (Array.isArray(ids) && ids.length) {
+        result = await ParsedEventsSchema.updateMany(
+          { source, _id: { $in: ids } },
+          { $set: { exported_at: now } },
+        );
+      } else if (exportedUntil) {
+        const until = new Date(exportedUntil);
+        result = await ParsedEventsSchema.updateMany(
+          { source, updatedAt: { $lte: until } },
+          { $set: { exported_at: now } },
+        );
+      } else {
+        return res.status(400).json({
+          status: 'error',
+          message: 'ids[] or exportedUntil is required',
+        });
+      }
+
+      res.json({
+        status: 'ok',
+        modified: result.modifiedCount,
+        source,
+      });
+    } catch (error) {
+      next(error);
+    }
+  };
+
+  static getRuns = async (req, res, next) => {
+    try {
+      const {
+        source: sourceParam,
+        type,
+        page: pageParam,
+        per_page: perPageParam,
+        from,
+        to,
+        status,
+      } = req.query;
+
+      const page = Math.max(1, parseInt(String(pageParam || 1), 10) || 1);
+      const per_page = Math.max(1, Math.min(100, parseInt(String(perPageParam || 20), 10) || 20));
+      const filter = {};
+
+      const sourceRaw = sourceParam || type;
+      if (sourceRaw) {
+        const list = String(sourceRaw).split(',').map((s) => s.trim()).filter(Boolean)
+          .map(resolveSource)
+          .filter(Boolean);
+        if (list.length === 1) filter.source = list[0];
+        else if (list.length > 1) filter.source = { $in: list };
+      }
+
+      if (status) filter.status = status;
+      if (from || to) {
+        filter.createdAt = {};
+        if (from) filter.createdAt.$gte = new Date(from);
+        if (to) filter.createdAt.$lt = new Date(to);
+      }
+
+      const total = await ParseRunsSchema.countDocuments(filter);
+      const runs = await ParseRunsSchema.find(filter)
+        .sort({ createdAt: -1 })
+        .skip((page - 1) * per_page)
+        .limit(per_page)
+        .lean();
+
+      res.json({
+        status: 'ok',
+        runs,
+        total,
         page,
         per_page,
       });
@@ -173,28 +224,78 @@ class ParsingController {
     }
   };
 
-  // POST /parsing/cleanup
-  static cleanup = async (req, res, next) => {
+  static getResults = async (req, res, next) => {
     try {
-      const days = Number(req.body?.days) > 0
-        ? Number(req.body.days)
-        : TAKEN_EVENTS_CLEANUP_DAYS;
+      const { operationId, runId } = req.params;
+      const id = runId || operationId;
+      const run = await ParseRunsSchema.findById(id).lean();
+      if (!run) {
+        return res.status(404).json({
+          status: 'error',
+          message: 'Parse run not found',
+        });
+      }
 
-      const result = await CleanupServices.cleanupTakenEvents(days);
-
+      const parsedEvents = await ParsedEventsSchema.find({ parse_run: id }).lean();
       res.json({
         status: 'ok',
-        deletedCount: result.deletedEvents,
-        deletedOperations: result.deletedOperations,
-        message: 'Cleanup completed',
-        days,
+        run,
+        operation: run,
+        events: parsedEvents.map((pe) => pe.event_data),
+        totalEvents: parsedEvents.length,
       });
     } catch (error) {
       next(error);
     }
   };
 
-  // POST /parsing/sync-cities-countries
+  static getOperations = async (req, res, next) => {
+    req.query.onlyPending = req.query.onlyPending || 'true';
+    return ParsingController.getEvents(req, res, next);
+  };
+
+  static cleanup = async (req, res, next) => {
+    try {
+      const months = Number(req.body?.months) > 0
+        ? Number(req.body.months)
+        : EXPIRED_EVENTS_CLEANUP_MONTHS;
+
+      const result = await CleanupServices.cleanupExpiredEvents(months);
+
+      res.json({
+        status: 'ok',
+        deletedCount: result.deletedEvents,
+        message: 'Expired events cleanup completed',
+        months,
+      });
+    } catch (error) {
+      next(error);
+    }
+  };
+
+  static categorizeBatch = async (req, res, next) => {
+    try {
+      const { events, source = 'backfill' } = req.body || {};
+      if (!Array.isArray(events) || !events.length) {
+        return res.status(400).json({
+          status: 'error',
+          message: 'events array is required',
+        });
+      }
+      if (events.length > 200) {
+        return res.status(400).json({
+          status: 'error',
+          message: 'At most 200 events per request',
+        });
+      }
+
+      const results = await categorizeBatch(events, source);
+      res.json({ status: 'ok', results });
+    } catch (error) {
+      next(error);
+    }
+  };
+
   static syncCitiesAndCountries = async (req, res, next) => {
     try {
       const { countries = [], cities = [], replaceAll = false } = req.body;
@@ -211,109 +312,77 @@ class ParsingController {
       let countriesDeleted = 0;
       let citiesDeleted = 0;
 
-      // Обработка стран
       if (replaceAll) {
-        // Удаляем все существующие страны
         const deleteCountriesResult = await CountriesSchema.deleteMany({});
         countriesDeleted = deleteCountriesResult.deletedCount;
-        logger.info(`Deleted ${countriesDeleted} countries`);
-
-        // Создаем новые страны
         if (countries.length > 0) {
-          const countriesToInsert = countries.map(country => ({
-            _id: country._id,
-            name: country.name,
-            flag_url: country.flag_url || '',
-          }));
-          await CountriesSchema.insertMany(countriesToInsert, { ordered: false }).catch(err => {
-            // Игнорируем ошибки дубликатов при вставке
-            if (err.code !== 11000) throw err;
-          });
-          countriesCreated = countries.length;
-          logger.info(`Created ${countriesCreated} countries`);
-        }
-      } else {
-        // Создаем только новые страны (по _id)
-        if (countries.length > 0) {
-          const existingCountryIds = await CountriesSchema.find({})
-            .select('_id')
-            .lean();
-          const existingIdsSet = new Set(
-            existingCountryIds.map(c => c._id.toString())
-          );
-
-          const newCountries = countries.filter(
-            country => !existingIdsSet.has(country._id.toString())
-          );
-
-          if (newCountries.length > 0) {
-            const countriesToInsert = newCountries.map(country => ({
+          await CountriesSchema.insertMany(
+            countries.map((country) => ({
               _id: country._id,
               name: country.name,
               flag_url: country.flag_url || '',
-            }));
-            await CountriesSchema.insertMany(countriesToInsert, { ordered: false }).catch(err => {
-              // Игнорируем ошибки дубликатов при вставке
-              if (err.code !== 11000) throw err;
-            });
-            countriesCreated = newCountries.length;
-            logger.info(`Created ${countriesCreated} new countries`);
-          }
+            })),
+            { ordered: false },
+          ).catch((err) => {
+            if (err.code !== 11000) throw err;
+          });
+          countriesCreated = countries.length;
+        }
+      } else if (countries.length > 0) {
+        const existingCountryIds = await CountriesSchema.find({}).select('_id').lean();
+        const existingIdsSet = new Set(existingCountryIds.map((c) => c._id.toString()));
+        const newCountries = countries.filter((c) => !existingIdsSet.has(c._id.toString()));
+        if (newCountries.length > 0) {
+          await CountriesSchema.insertMany(
+            newCountries.map((country) => ({
+              _id: country._id,
+              name: country.name,
+              flag_url: country.flag_url || '',
+            })),
+            { ordered: false },
+          ).catch((err) => {
+            if (err.code !== 11000) throw err;
+          });
+          countriesCreated = newCountries.length;
         }
       }
 
-      // Обработка городов
       if (replaceAll) {
-        // Удаляем все существующие города
         const deleteCitiesResult = await CitiesSchema.deleteMany({});
         citiesDeleted = deleteCitiesResult.deletedCount;
-        logger.info(`Deleted ${citiesDeleted} cities`);
-
-        // Создаем новые города
         if (cities.length > 0) {
-          const citiesToInsert = cities.map(city => ({
-            _id: city._id,
-            country_id: city.country_id,
-            name: city.name,
-            sort: city.sort || 999,
-            coordinates: city.coordinates || { lat: '0', lon: '0' },
-          }));
-          await CitiesSchema.insertMany(citiesToInsert, { ordered: false }).catch(err => {
-            // Игнорируем ошибки дубликатов при вставке
-            if (err.code !== 11000) throw err;
-          });
-          citiesCreated = cities.length;
-          logger.info(`Created ${citiesCreated} cities`);
-        }
-      } else {
-        // Создаем только новые города (по _id)
-        if (cities.length > 0) {
-          const existingCityIds = await CitiesSchema.find({})
-            .select('_id')
-            .lean();
-          const existingIdsSet = new Set(
-            existingCityIds.map(c => c._id.toString())
-          );
-
-          const newCities = cities.filter(
-            city => !existingIdsSet.has(city._id.toString())
-          );
-
-          if (newCities.length > 0) {
-            const citiesToInsert = newCities.map(city => ({
+          await CitiesSchema.insertMany(
+            cities.map((city) => ({
               _id: city._id,
               country_id: city.country_id,
               name: city.name,
               sort: city.sort || 999,
               coordinates: city.coordinates || { lat: '0', lon: '0' },
-            }));
-            await CitiesSchema.insertMany(citiesToInsert, { ordered: false }).catch(err => {
-              // Игнорируем ошибки дубликатов при вставке
-              if (err.code !== 11000) throw err;
-            });
-            citiesCreated = newCities.length;
-            logger.info(`Created ${citiesCreated} new cities`);
-          }
+            })),
+            { ordered: false },
+          ).catch((err) => {
+            if (err.code !== 11000) throw err;
+          });
+          citiesCreated = cities.length;
+        }
+      } else if (cities.length > 0) {
+        const existingCityIds = await CitiesSchema.find({}).select('_id').lean();
+        const existingIdsSet = new Set(existingCityIds.map((c) => c._id.toString()));
+        const newCities = cities.filter((c) => !existingIdsSet.has(c._id.toString()));
+        if (newCities.length > 0) {
+          await CitiesSchema.insertMany(
+            newCities.map((city) => ({
+              _id: city._id,
+              country_id: city.country_id,
+              name: city.name,
+              sort: city.sort || 999,
+              coordinates: city.coordinates || { lat: '0', lon: '0' },
+            })),
+            { ordered: false },
+          ).catch((err) => {
+            if (err.code !== 11000) throw err;
+          });
+          citiesCreated = newCities.length;
         }
       }
 
@@ -321,14 +390,8 @@ class ParsingController {
         status: 'ok',
         message: 'Sync completed',
         statistics: {
-          countries: {
-            created: countriesCreated,
-            deleted: countriesDeleted,
-          },
-          cities: {
-            created: citiesCreated,
-            deleted: citiesDeleted,
-          },
+          countries: { created: countriesCreated, deleted: countriesDeleted },
+          cities: { created: citiesCreated, deleted: citiesDeleted },
         },
       });
     } catch (error) {
@@ -337,7 +400,6 @@ class ParsingController {
     }
   };
 
-  // POST /parsing/submit-fienta-html
   static submitFientaHtml = async (req, res, next) => {
     try {
       const { html: data } = req.body;
@@ -348,8 +410,7 @@ class ParsingController {
           message: 'Data content is required and must be a string',
         });
       }
-      
-      // Проверяем, что это валидный JSON
+
       try {
         JSON.parse(data);
       } catch (e) {
@@ -358,14 +419,12 @@ class ParsingController {
           message: 'Data must be a valid JSON string',
         });
       }
-      
+
       const page = new FientaPagesSchema({
         data,
         is_processed: false,
       });
       await page.save();
-
-      logger.info(`Fienta page saved with id: ${page._id}`);
 
       res.json({
         status: 'ok',
@@ -373,15 +432,22 @@ class ParsingController {
         pageId: page._id.toString(),
       });
     } catch (error) {
-      logger.error(`Error saving Fienta page: ${error.message || error}`);
       next(error);
     }
   };
 
   static getWeeklyStats = async (req, res, next) => {
     try {
-      const { source, from, to } = req.query;
-      const stats = await StatsServices.getWeeklyStats({ source, from, to });
+      const { source, sources, from, to } = req.query;
+      const sourceList = sources
+        ? String(sources).split(',').map((s) => s.trim()).filter(Boolean)
+        : undefined;
+      const stats = await StatsServices.getWeeklyStats({
+        source,
+        sources: sourceList,
+        from,
+        to,
+      });
       res.json({
         status: 'ok',
         ...stats,
@@ -390,7 +456,90 @@ class ParsingController {
       next(error);
     }
   };
+
+  static statsPage = async (req, res) => {
+    const filePath = path.join(__dirname, '../../public/parsing-stats.html');
+    res.sendFile(filePath);
+  };
+
+  static citiesPage = async (req, res) => {
+    res.redirect('/parsing/stats-ui#cities');
+  };
+
+  static getCountries = async (req, res, next) => {
+    try {
+      const countries = await CountriesSchema.find({})
+        .select('_id name flag_url')
+        .sort({ name: 1 })
+        .lean();
+      res.json({ status: 'ok', countries });
+    } catch (error) {
+      next(error);
+    }
+  };
+
+  static discoverCities = async (req, res, next) => {
+    try {
+      const { source, countryCodes } = req.body || {};
+      if (!source) {
+        return res.status(400).json({ status: 'error', message: 'source is required' });
+      }
+      const result = await CityDiscoveryServices.discover(source, { countryCodes });
+      res.json(result);
+    } catch (error) {
+      next(error);
+    }
+  };
+
+  static listCitySuggestions = async (req, res, next) => {
+    try {
+      const page = Math.max(1, parseInt(String(req.query.page || 1), 10) || 1);
+      const per_page = Math.max(1, Math.min(200, parseInt(String(req.query.per_page || 50), 10) || 50));
+      const result = await CityDiscoveryServices.listSuggestions({
+        source: req.query.source || undefined,
+        status: req.query.status || 'pending',
+        page,
+        per_page,
+        q: req.query.q || '',
+      });
+      res.json({ status: 'ok', ...result });
+    } catch (error) {
+      next(error);
+    }
+  };
+
+  static citySuggestionsMetrics = async (req, res, next) => {
+    try {
+      const metrics = await CityDiscoveryServices.metrics();
+      res.json({ status: 'ok', metrics });
+    } catch (error) {
+      next(error);
+    }
+  };
+
+  static approveCitySuggestion = async (req, res, next) => {
+    try {
+      const result = await CityDiscoveryServices.approve(req.params.id, req.body || {});
+      res.json({ status: 'ok', ...result });
+    } catch (error) {
+      if (error.status) {
+        return res.status(error.status).json({ status: 'error', message: error.message });
+      }
+      next(error);
+    }
+  };
+
+  static rejectCitySuggestion = async (req, res, next) => {
+    try {
+      const doc = await CityDiscoveryServices.reject(req.params.id, req.body?.reason || '');
+      res.json({ status: 'ok', suggestion: doc });
+    } catch (error) {
+      if (error.status) {
+        return res.status(error.status).json({ status: 'error', message: error.message });
+      }
+      next(error);
+    }
+  };
 }
 
 export default ParsingController;
-

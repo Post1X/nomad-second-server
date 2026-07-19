@@ -2,12 +2,13 @@ import moment from 'moment';
 import https from 'https';
 import CitiesSchema from '../schemas/CitiesSchema';
 import CountriesSchema from '../schemas/CountriesSchema';
-import OperationsSchema from '../schemas/OperationsSchema';
+import ParseRunsSchema from '../schemas/ParseRunsSchema';
 import { EVENT_SOURCE, TICKETMASTER_COUNTRY_CODES } from '../helpers/constants';
 import { findCountryByIso, resolveTicketmasterCountryCodes } from '../helpers/isoCountryAliases';
 import findCityInDb from '../helpers/cityMatching';
 import { createLoggerWithSource } from '../helpers/logger';
 import saveProcessedEvents from '../helpers/saveProcessedEvents';
+import createCitySuggestionCollector from '../helpers/createCitySuggestionCollector';
 
 const logger = createLoggerWithSource('PARSE_TICKETMASTER');
 
@@ -221,6 +222,7 @@ const parseEventsForCountry = async ({
   pageSize,
   maxPages,
   skippedByCity,
+  citySuggestions,
 }) => {
   const events = [];
   let skippedNoVenue = 0;
@@ -306,6 +308,9 @@ const parseEventsForCountry = async ({
           skippedNoCity += 1;
           const cityKey = venueCityName || 'Unknown';
           skippedByCity[cityKey] = (skippedByCity[cityKey] || 0) + 1;
+          if (venueCityName && citySuggestions) {
+            citySuggestions.note(venueCityName);
+          }
         }
 
         if (!dateStart) continue;
@@ -382,10 +387,13 @@ const parseEventsForCountry = async ({
 
 moment.locale('ru');
 
-async function parseTicketmaster({ meta, operationId }) {
+async function parseTicketmaster({ meta = {}, runId, operationId }) {
+  const parseRunId = runId || operationId;
   const events = [];
   const errorTexts = [];
+  const infoTexts = [];
   const skippedByCity = {};
+  const citySuggestions = createCitySuggestionCollector(EVENT_SOURCE.ticketmaster);
 
   const {
     maxPages,
@@ -397,10 +405,10 @@ async function parseTicketmaster({ meta, operationId }) {
   if (!apiKey) {
     const errMsg = 'TICKETMASTER_API_KEY is not set in environment';
     errorTexts.push(errMsg);
-    await OperationsSchema.findByIdAndUpdate(operationId, {
+    await ParseRunsSchema.findByIdAndUpdate(parseRunId, {
       status: 'error',
       errorText: errMsg,
-      finish_time: new Date(),
+      finishedAt: new Date(),
     });
     return;
   }
@@ -432,6 +440,7 @@ async function parseTicketmaster({ meta, operationId }) {
           pageSize,
           maxPages,
           skippedByCity,
+          citySuggestions,
         });
 
         events.push(...result.events);
@@ -455,6 +464,19 @@ async function parseTicketmaster({ meta, operationId }) {
     logger.error(`FATAL ERROR: ${errMsg}`, e);
   }
 
+  let citySuggestionStats = null;
+  try {
+    citySuggestionStats = await citySuggestions.flush();
+    if (citySuggestionStats.candidatesSeen > 0) {
+      infoTexts.push(
+        `CitySuggestions: +${citySuggestionStats.created} new, ${citySuggestionStats.updated} updated, `
+        + `${citySuggestionStats.alreadyInDb} already in DB`,
+      );
+    }
+  } catch (e) {
+    errorTexts.push(`CitySuggestions flush failed: ${e?.message || e}`);
+  }
+
   const skippedCitiesOver5 = buildSkippedCitiesSummary(skippedByCity);
   const extraStatistics = {
     countryCodes,
@@ -463,14 +485,15 @@ async function parseTicketmaster({ meta, operationId }) {
     skippedNoVenue,
     skippedNoCity,
     skippedCitiesOver5,
+    citySuggestions: citySuggestionStats,
   };
 
   try {
     await saveProcessedEvents({
-      operationId,
+      runId: parseRunId,
       events,
       source: EVENT_SOURCE.ticketmaster,
-      infoTexts: [],
+      infoTexts,
       errorTexts,
       extraStatistics,
     });

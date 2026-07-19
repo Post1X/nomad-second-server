@@ -9,10 +9,11 @@ import { exec } from 'child_process';
 import { promisify } from 'util';
 import { URL } from 'url';
 import CitiesSchema from '../schemas/CitiesSchema';
-import OperationsSchema from '../schemas/OperationsSchema';
 import { EVENT_SOURCE } from '../helpers/constants';
 import { createLoggerWithSource } from '../helpers/logger';
 import saveProcessedEvents from '../helpers/saveProcessedEvents';
+import logParseRun from '../helpers/logParseRun';
+import createCitySuggestionCollector from '../helpers/createCitySuggestionCollector';
 
 const logger = createLoggerWithSource('PARSE_EVENTIM');
 
@@ -277,26 +278,16 @@ const extractGz = async (gzPath, extractPath) => {
   });
 };
 
-const logProgress = async (operationId, message) => {
-  if (operationId) {
-    try {
-      const operation = await OperationsSchema.findById(operationId);
-      if (operation) {
-        const timestamp = new Date().toISOString();
-        const newLog = `[${timestamp}] ${message}`;
-        operation.infoText = operation.infoText ? `${operation.infoText}\n${newLog}` : newLog;
-        await operation.save();
-      }
-    } catch (e) {
-      logger.error(`Error logging progress: ${e.message || e}`);
-    }
-  }
+const logProgress = async (runId, message) => {
+  await logParseRun(runId, `[${new Date().toISOString()}] ${message}`);
 };
 
-async function parseEventim({ meta, operationId }) {
+async function parseEventim({ meta = {}, runId, operationId }) {
+  const parseRunId = runId || operationId;
   const events = [];
   const errorTexts = [];
   const infoTexts = [];
+  const citySuggestions = createCitySuggestionCollector(EVENT_SOURCE.eventim);
 
   try {
     const {
@@ -306,7 +297,7 @@ async function parseEventim({ meta, operationId }) {
     
     const cities = await loadCities();
 
-    await logProgress(operationId, 'Starting Eventim parsing...');
+    await logProgress(parseRunId, 'Starting Eventim parsing...');
 
     let raw;
     let extractedPath = null;
@@ -314,9 +305,9 @@ async function parseEventim({ meta, operationId }) {
     const tmpDir = path.join(process.cwd(), 'tmp');
     if (!fs.existsSync(tmpDir)) {
       fs.mkdirSync(tmpDir, { recursive: true });
-      await logProgress(operationId, `Created tmp directory: ${tmpDir}`);
+      await logProgress(parseRunId, `Created tmp directory: ${tmpDir}`);
     }
-    await logProgress(operationId, `Using tmp directory: ${tmpDir}`);
+    await logProgress(parseRunId, `Using tmp directory: ${tmpDir}`);
     const rawPath = path.join(tmpDir, 'eventim.json');
     const extractPath = tmpDir;
     const eventimUrlDefault = process.env.EVENTIM_URL;
@@ -325,25 +316,25 @@ async function parseEventim({ meta, operationId }) {
     const urlToUse = eventimUrl || eventimUrlDefault;
 
     try {
-      await logProgress(operationId, `Downloading Eventim file from ${urlToUse}...`);
+      await logProgress(parseRunId, `Downloading Eventim file from ${urlToUse}...`);
       const urlObj = new URL(urlToUse);
       const urlFileName = path.basename(urlObj.pathname) || 'eventim.json.gz';
       const gzPath = path.join(tmpDir, urlFileName);
-      await logProgress(operationId, `Will save archive to: ${gzPath}`);
+      await logProgress(parseRunId, `Will save archive to: ${gzPath}`);
       
       await downloadFile(urlToUse, gzPath, eventimPassword, eventimUsername);
-      await logProgress(operationId, `Archive downloaded to: ${gzPath}`);
+      await logProgress(parseRunId, `Archive downloaded to: ${gzPath}`);
       
-      await logProgress(operationId, 'Extracting archive...');
+      await logProgress(parseRunId, 'Extracting archive...');
       extractedPath = await extractGz(gzPath, extractPath);
-      await logProgress(operationId, `Archive extracted to: ${extractedPath}`);
+      await logProgress(parseRunId, `Archive extracted to: ${extractedPath}`);
       
       if (fs.existsSync(gzPath)) {
         fs.unlinkSync(gzPath);
       }
 
       const extractedFileName = path.basename(extractedPath);
-      await logProgress(operationId, `Reading extracted file: ${extractedFileName}`);
+      await logProgress(parseRunId, `Reading extracted file: ${extractedFileName}`);
 
       if (extractedFileName.endsWith('.nml')) {
         const nmlContent = fs.readFileSync(extractedPath, 'utf8');
@@ -358,32 +349,32 @@ async function parseEventim({ meta, operationId }) {
         }
       } else if (extractedFileName.endsWith('.json')) {
         raw = fs.readFileSync(extractedPath, 'utf8');
-        await logProgress(operationId, `File read successfully, size: ${raw.length} bytes`);
+        await logProgress(parseRunId, `File read successfully, size: ${raw.length} bytes`);
       } else if (fs.existsSync(rawPath)) {
         raw = fs.readFileSync(rawPath, 'utf8');
         const cacheMsg = 'Using cached eventim.json file';
         infoTexts.push(cacheMsg);
-        await logProgress(operationId, cacheMsg);
+        await logProgress(parseRunId, cacheMsg);
       } else {
         const errMsg = `No NML or JSON file found in extracted archive. Extracted file: ${extractedFileName}`;
         logger.error(errMsg);
         throw new Error(errMsg);
       }
-      await logProgress(operationId, 'File downloaded and extracted successfully');
+      await logProgress(parseRunId, 'File downloaded and extracted successfully');
     } catch (downloadErr) {
       const errMsg = downloadErr?.message || downloadErr?.toString() || 'Unknown download error';
       errorTexts.push(`Failed to download/extract Eventim file: ${errMsg}`);
       logger.error(`Eventim download/extract error: ${errMsg}`, downloadErr);
-      await logProgress(operationId, `ERROR during download/extract: ${errMsg}`);
+      await logProgress(parseRunId, `ERROR during download/extract: ${errMsg}`);
       
       if (fs.existsSync(rawPath)) {
         raw = fs.readFileSync(rawPath, 'utf8');
         const fallbackMsg = 'Using cached eventim.json file as fallback';
         infoTexts.push(fallbackMsg);
-        await logProgress(operationId, fallbackMsg);
+        await logProgress(parseRunId, fallbackMsg);
       } else {
         logger.error(`FATAL: No cached file available. Error: ${errMsg}`);
-        await logProgress(operationId, `FATAL: No cached file available. Error: ${errMsg}`);
+        await logProgress(parseRunId, `FATAL: No cached file available. Error: ${errMsg}`);
         throw downloadErr;
       }
     }
@@ -392,11 +383,11 @@ async function parseEventim({ meta, operationId }) {
       const errMsg = 'No data available to parse (raw is empty)';
       errorTexts.push(errMsg);
       logger.error(errMsg);
-      await logProgress(operationId, `FATAL ERROR: ${errMsg}`);
+      await logProgress(parseRunId, `FATAL ERROR: ${errMsg}`);
       throw new Error(errMsg);
     }
 
-    await logProgress(operationId, 'Parsing Eventim data...');
+    await logProgress(parseRunId, 'Parsing Eventim data...');
     let parsedData;
     try {
       parsedData = JSON.parse(raw);
@@ -404,12 +395,12 @@ async function parseEventim({ meta, operationId }) {
       const errMsg = `Failed to parse JSON: ${parseErr?.message || parseErr}`;
       errorTexts.push(errMsg);
       logger.error(errMsg, parseErr);
-      await logProgress(operationId, `FATAL ERROR: ${errMsg}`);
+      await logProgress(parseRunId, `FATAL ERROR: ${errMsg}`);
       throw new Error(errMsg);
     }
     
     const { eventserie = [] } = parsedData;
-    await logProgress(operationId, `Found ${eventserie.length} event series to process`);
+    await logProgress(parseRunId, `Found ${eventserie.length} event series to process`);
 
     for (const series of eventserie) {
       const photoUrl = series.esPictureBig || series.esPicture || series.esPictureSmall || null;
@@ -431,9 +422,10 @@ async function parseEventim({ meta, operationId }) {
         const resolvedCountryId = countryId || matchedCity?.country_id || null;
 
         if (!resolvedCityId || !resolvedCountryId) {
+          if (targetCity) citySuggestions.note(targetCity);
           const skipMsg = `Event "${event.eventName || series.esName}" – city/country missing (targetCity="${targetCity}"); saving without city.`;
           infoTexts.push(skipMsg);
-          await logProgress(operationId, `INFO: ${skipMsg}`);
+          await logProgress(parseRunId, `INFO: ${skipMsg}`);
         }
 
         const newEvent = {
@@ -479,25 +471,39 @@ async function parseEventim({ meta, operationId }) {
       } catch (unlinkErr) {
         const unlinkMsg = `Failed to delete extracted file: ${unlinkErr.message}`;
         infoTexts.push(unlinkMsg);
-        await logProgress(operationId, `WARNING: ${unlinkMsg}`);
+        await logProgress(parseRunId, `WARNING: ${unlinkMsg}`);
       }
     }
 
-    await logProgress(operationId, `Parsing completed. Total: ${events.length} events parsed`);
+    await logProgress(parseRunId, `Parsing completed. Total: ${events.length} events parsed`);
   } catch (e) {
     const errMsg = e?.message || 'Unknown error while parsing Eventim';
     errorTexts.push(errMsg);
     logger.error(`FATAL ERROR: ${errMsg}`, e);
-    await logProgress(operationId, `FATAL ERROR: ${errMsg}`);
+    await logProgress(parseRunId, `FATAL ERROR: ${errMsg}`);
+  }
+
+  let citySuggestionStats = null;
+  try {
+    citySuggestionStats = await citySuggestions.flush();
+    if (citySuggestionStats.candidatesSeen > 0) {
+      infoTexts.push(
+        `CitySuggestions: +${citySuggestionStats.created} new, ${citySuggestionStats.updated} updated, `
+        + `${citySuggestionStats.alreadyInDb} already in DB`,
+      );
+    }
+  } catch (e) {
+    errorTexts.push(`CitySuggestions flush failed: ${e?.message || e}`);
   }
 
   try {
     await saveProcessedEvents({
-      operationId,
+      runId: parseRunId,
       events,
       source: EVENT_SOURCE.eventim,
       infoTexts,
       errorTexts,
+      extraStatistics: { citySuggestions: citySuggestionStats },
     });
   } catch (error) {
     logger.error(`Error saving events to database: ${error.message || error}`, error);

@@ -4,6 +4,7 @@ import fienta from './fienta';
 import kontramarka from './kontramarka';
 import ticketmaster from './ticketmaster';
 import israelinfo from './israelinfo';
+import backfill from './backfill';
 
 const BY_SOURCE = {
   [EVENT_SOURCE.eventim]: eventim,
@@ -11,6 +12,7 @@ const BY_SOURCE = {
   [EVENT_SOURCE.kontramarka]: kontramarka,
   [EVENT_SOURCE.ticketmaster]: ticketmaster,
   [EVENT_SOURCE.israelinfo]: israelinfo,
+  backfill,
 };
 
 export const getCategoryConfigForSource = (source) => {

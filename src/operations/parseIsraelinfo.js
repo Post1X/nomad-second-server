@@ -4,12 +4,13 @@ import { URL } from 'url';
 import moment from 'moment';
 import CitiesSchema from '../schemas/CitiesSchema';
 import CountriesSchema from '../schemas/CountriesSchema';
-import OperationsSchema from '../schemas/OperationsSchema';
+import ParseRunsSchema from '../schemas/ParseRunsSchema';
 import { ENV, EVENT_SOURCE } from '../helpers/constants';
 import findCityInDb from '../helpers/cityMatching';
 import { findCountryByIso } from '../helpers/isoCountryAliases';
 import saveProcessedEvents from '../helpers/saveProcessedEvents';
 import { createLoggerWithSource } from '../helpers/logger';
+import createCitySuggestionCollector from '../helpers/createCitySuggestionCollector';
 
 const logger = createLoggerWithSource('PARSE_ISRAELINFO');
 
@@ -231,15 +232,17 @@ async function discoverFeedBase(cookieJar) {
   return null;
 }
 
-async function parseIsraelinfo({ meta = {}, operationId }) {
+async function parseIsraelinfo({ meta = {}, runId, operationId }) {
+  const parseRunId = runId || operationId;
   const infoTexts = [];
   const errorTexts = [];
   const events = [];
+  const citySuggestions = createCitySuggestionCollector(EVENT_SOURCE.israelinfo);
 
   const logProgress = async (msg) => {
     logger.info(msg);
-    const op = await OperationsSchema.findById(operationId);
-    await OperationsSchema.findByIdAndUpdate(operationId, {
+    const op = await ParseRunsSchema.findById(parseRunId);
+    await ParseRunsSchema.findByIdAndUpdate(parseRunId, {
       infoText: `${op?.infoText || ''}\n${msg}`,
     });
   };
@@ -298,6 +301,12 @@ async function parseIsraelinfo({ meta = {}, operationId }) {
       for (const cityName of cityNames) {
         matchedCity = findCityInDb(cities, cityName);
         if (matchedCity) break;
+      }
+
+      if (!matchedCity && !meta.cityId) {
+        for (const cityName of cityNames) {
+          citySuggestions.note(cityName, { source_url: item.link || feedUrl || '' });
+        }
       }
 
       const cityId = meta.cityId || matchedCity?._id || null;
@@ -361,13 +370,27 @@ async function parseIsraelinfo({ meta = {}, operationId }) {
     await logProgress(`FATAL ERROR: ${errMsg}`);
   }
 
+  let citySuggestionStats = null;
+  try {
+    citySuggestionStats = await citySuggestions.flush();
+    if (citySuggestionStats.candidatesSeen > 0) {
+      infoTexts.push(
+        `CitySuggestions: +${citySuggestionStats.created} new, ${citySuggestionStats.updated} updated, `
+        + `${citySuggestionStats.alreadyInDb} already in DB`,
+      );
+    }
+  } catch (e) {
+    errorTexts.push(`CitySuggestions flush failed: ${e?.message || e}`);
+  }
+
   try {
     await saveProcessedEvents({
-      operationId,
+      runId: parseRunId,
       events,
       source: EVENT_SOURCE.israelinfo,
       infoTexts,
       errorTexts,
+      extraStatistics: { citySuggestions: citySuggestionStats },
     });
   } catch (error) {
     logger.error(`Error saving Israelinfo events: ${error.message || error}`);

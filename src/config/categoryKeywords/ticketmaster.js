@@ -1,22 +1,80 @@
 import BASE_CATEGORY_KEYWORDS from './base';
 
 export default {
-  threshold: 3,
+  threshold: 4,
   keywords: {
     ...BASE_CATEGORY_KEYWORDS,
-    'Музыка': [
-      ...BASE_CATEGORY_KEYWORDS['Музыка'],
-      { word: 'Music', value: 1 },
-      { word: 'Rock', value: 1 },
-      { word: 'Pop', value: 1 },
+    Музыка: [
+      ...BASE_CATEGORY_KEYWORDS.Музыка,
+      { word: 'Music/Rock', value: 3 },
+      { word: 'Music/Pop', value: 3 },
+      { word: 'Music/Classical', value: 3 },
+      { word: 'Music/Jazz', value: 3 },
+      { word: 'Music/Hip-Hop', value: 3 },
+      { word: 'Music/Electronic', value: 3 },
+      { word: 'Music/Country', value: 3 },
+      { word: 'Music/R&B', value: 3 },
+      { word: 'Music/World', value: 2 },
+      { word: 'live performance', value: 2 },
       { word: 'Classical', value: 1 },
     ],
-    'Спорт': [
-      ...BASE_CATEGORY_KEYWORDS['Спорт'],
+    Театр: [
+      ...BASE_CATEGORY_KEYWORDS.Театр,
+      { word: 'Arts & Theatre', value: 3 },
+      { word: 'Theatre', value: 2 },
+      { word: 'Play', value: 1 },
+    ],
+    'Шоу/Мюзиклы': [
+      ...BASE_CATEGORY_KEYWORDS['Шоу/Мюзиклы'],
+      { word: 'Musical/Theatre', value: 3 },
+      { word: 'Circus', value: 2 },
+      { word: 'Magic & Illusion', value: 3 },
+    ],
+    Юмор: [
+      ...BASE_CATEGORY_KEYWORDS.Юмор,
+      { word: 'Comedy', value: 2 },
+      { word: 'Comedy/Stand Up', value: 3 },
+    ],
+    Фестивали: [
+      ...BASE_CATEGORY_KEYWORDS.Фестивали,
+      { word: 'Festival', value: 2 },
+      { word: 'Music Festival', value: 3 },
+    ],
+    Семейное: [
+      ...BASE_CATEGORY_KEYWORDS.Семейное,
+      { word: 'Family', value: 1 },
+      { word: 'Children', value: 2 },
+      { word: 'Kids', value: 2 },
+    ],
+    Спорт: [
+      ...BASE_CATEGORY_KEYWORDS.Спорт,
       { word: 'Sports', value: 1 },
-      { word: 'NBA', value: 1 },
-      { word: 'NFL', value: 1 },
-      { word: 'MLS', value: 1 },
+      { word: 'Sports/Basketball', value: 3 },
+      { word: 'Sports/Football', value: 3 },
+      { word: 'Sports/Baseball', value: 3 },
+      { word: 'Sports/Hockey', value: 3 },
+      { word: 'Sports/Soccer', value: 3 },
+      { word: 'NBA', value: 2 },
+      { word: 'NFL', value: 2 },
+      { word: 'NHL', value: 2 },
+      { word: 'MLS', value: 2 },
+      { word: 'MLB', value: 2 },
+    ],
+    Выставки: [
+      ...BASE_CATEGORY_KEYWORDS.Выставки,
+      { word: 'Exhibition', value: 2 },
+      { word: 'Museum', value: 2 },
+    ],
+    Танцы: [
+      ...BASE_CATEGORY_KEYWORDS.Танцы,
+      { word: 'Dance', value: 1 },
+      { word: 'Ballet', value: 3 },
+    ],
+    'Лекции/Семинары': [
+      ...BASE_CATEGORY_KEYWORDS['Лекции/Семинары'],
+      { word: 'Lecture', value: 2 },
+      { word: 'Seminar', value: 2 },
+      { word: 'Workshop', value: 2 },
     ],
   },
 };

@@ -1,57 +1,38 @@
-import OperationsSchema from '../schemas/OperationsSchema';
 import ParsedEventsSchema from '../schemas/ParsedEventsSchema';
-import { TAKEN_EVENTS_CLEANUP_DAYS } from '../helpers/constants';
+import { EXPIRED_EVENTS_CLEANUP_MONTHS } from '../helpers/constants';
 import { createLoggerWithSource } from '../helpers/logger';
 
 const logger = createLoggerWithSource('CLEANUP');
 
 class CleanupServices {
-    static async cleanupTakenEvents(days = TAKEN_EVENTS_CLEANUP_DAYS) {
+  static async cleanupExpiredEvents(months = EXPIRED_EVENTS_CLEANUP_MONTHS) {
     const cutoffDate = new Date();
-    cutoffDate.setDate(cutoffDate.getDate() - days);
+    cutoffDate.setMonth(cutoffDate.getMonth() - months);
 
-    const takenOperations = await OperationsSchema.find({
-      is_taken: true,
-      taken_at: { $lt: cutoffDate },
-    }).select('_id').lean();
-
-        const legacyOps = await OperationsSchema.find({
-      is_taken: true,
-      taken_at: { $exists: false },
+    const result = await ParsedEventsSchema.deleteMany({
       $or: [
-        { finish_time: { $lt: cutoffDate } },
-        { updatedAt: { $lt: cutoffDate } },
+        { 'event_data.date_end': { $lt: cutoffDate } },
+        {
+          'event_data.date_end': { $in: [null, ''] },
+          'event_data.date_start': { $lt: cutoffDate },
+        },
       ],
-    }).select('_id').lean();
-
-    const operationIds = [...new Set([
-      ...takenOperations.map((op) => String(op._id)),
-      ...legacyOps.map((op) => String(op._id)),
-    ])];
-
-    if (operationIds.length === 0) {
-      logger.info(`Cleanup: nothing to delete (cutoff=${cutoffDate.toISOString()}, days=${days})`);
-      return { deletedEvents: 0, deletedOperations: 0, operationIds: [] };
-    }
-
-    const ids = operationIds;
-    const deleteEvents = await ParsedEventsSchema.deleteMany({
-      operation: { $in: ids },
-    });
-    const deleteOps = await OperationsSchema.deleteMany({
-      _id: { $in: ids },
     });
 
     logger.info(
-      `Cleanup: deleted ${deleteEvents.deletedCount} events, ${deleteOps.deletedCount} operations `
-      + `(ops=${ids.length}, days=${days})`,
+      `Expired cleanup: deleted ${result.deletedCount} events older than ${months} months `
+      + `(cutoff=${cutoffDate.toISOString()})`,
     );
 
     return {
-      deletedEvents: deleteEvents.deletedCount,
-      deletedOperations: deleteOps.deletedCount,
-      operationIds: ids,
+      deletedEvents: result.deletedCount,
+      months,
+      cutoff: cutoffDate,
     };
+  }
+
+  static async cleanupTakenEvents(months = EXPIRED_EVENTS_CLEANUP_MONTHS) {
+    return this.cleanupExpiredEvents(months);
   }
 }
 

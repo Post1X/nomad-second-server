@@ -1,11 +1,18 @@
-import OperationsSchema from '../schemas/OperationsSchema';
+import ParseRunsSchema from '../schemas/ParseRunsSchema';
 import ParsedEventsSchema from '../schemas/ParsedEventsSchema';
 import { processParsedEvents } from '../services/ProcessParsedEventsServices';
-import { createLoggerWithSource } from '../helpers/logger';
+import {
+  eventFingerprint,
+  classifyMatchStage,
+  applyMergeToExisting,
+} from './merge';
+import { OPERATION_STATUSES } from './constants';
+import { createLoggerWithSource } from './logger';
 
 const logger = createLoggerWithSource('SAVE_EVENTS');
 
 export async function saveProcessedEvents({
+  runId,
   operationId,
   events,
   source,
@@ -13,57 +20,80 @@ export async function saveProcessedEvents({
   errorTexts = [],
   extraStatistics = {},
 }) {
+  const parseRunId = runId || operationId;
   const { events: processed, stats: processStats } = await processParsedEvents(events || [], source);
 
-  const BATCH_SIZE = 10;
+  let inserted = 0;
+  let updated = 0;
+  let skipped = 0;
+
   try {
-    for (let i = 0; i < processed.length; i += BATCH_SIZE) {
-      const batch = processed.slice(i, i + BATCH_SIZE);
-      const batchNumber = Math.floor(i / BATCH_SIZE) + 1;
+    for (const event of processed) {
+      const fingerprint = eventFingerprint(source, event.name, event.address);
+      // eslint-disable-next-line no-await-in-loop
+      const existingDoc = await ParsedEventsSchema.findOne({ source, fingerprint }).lean();
+      const existingData = existingDoc?.event_data || null;
+      const stage = classifyMatchStage(existingData, event);
+      const { event: mergedEvent, changed } = applyMergeToExisting(existingData, event, stage);
 
-      // eslint-disable-next-line no-await-in-loop
-      await ParsedEventsSchema.insertMany(
-        batch.map((event) => ({
-          operation: operationId,
-          event_data: event,
-          batch_number: batchNumber,
-        })),
-      );
+      if (stage === 'skip' || !changed) {
+        skipped += 1;
+        continue;
+      }
 
-      // eslint-disable-next-line no-await-in-loop
-      const operation = await OperationsSchema.findById(operationId);
-      // eslint-disable-next-line no-await-in-loop
-      await OperationsSchema.findByIdAndUpdate(operationId, {
-        infoText: `${operation?.infoText || ''}\nОбработано ${i + batch.length} из ${processed.length} событий. Батч ${batchNumber}`,
-      });
+      if (!existingDoc) {
+        // eslint-disable-next-line no-await-in-loop
+        await ParsedEventsSchema.create({
+          source,
+          fingerprint,
+          event_data: mergedEvent,
+          parse_run: parseRunId,
+          exported_at: null,
+        });
+        inserted += 1;
+      } else {
+        // eslint-disable-next-line no-await-in-loop
+        await ParsedEventsSchema.updateOne(
+          { _id: existingDoc._id },
+          {
+            $set: {
+              event_data: mergedEvent,
+              parse_run: parseRunId,
+              exported_at: null,
+            },
+          },
+        );
+        updated += 1;
+      }
     }
 
-    const operation = await OperationsSchema.findById(operationId);
-    const finalInfoText = operation?.infoText || '';
+    const upsertStats = { inserted, updated, skipped };
     const additionalInfo = infoTexts.length > 0 ? `\n${infoTexts.join('\n')}` : '';
+    const run = await ParseRunsSchema.findById(parseRunId);
+    const finalInfoText = `${run?.infoText || ''}\nSaved: insert=${inserted}, update=${updated}, skip=${skipped}${additionalInfo}`;
 
-    await OperationsSchema.findByIdAndUpdate(operationId, {
-      status: 'success',
-      finish_time: new Date(),
+    await ParseRunsSchema.findByIdAndUpdate(parseRunId, {
+      status: OPERATION_STATUSES.success,
+      finishedAt: new Date(),
       statistics: JSON.stringify({
         total: processed.length,
-        batches: Math.ceil(processed.length / BATCH_SIZE) || 0,
+        upsert: upsertStats,
         errors: errorTexts.length,
         process: processStats,
         ...extraStatistics,
       }),
       errorText: errorTexts.join('\n'),
-      infoText: finalInfoText + additionalInfo,
+      infoText: finalInfoText,
     });
 
-    logger.info(`Saved ${processed.length} events for operation ${operationId}`);
-    return { processed, processStats };
+    logger.info(`Upserted events for run ${parseRunId}: ${JSON.stringify(upsertStats)}`);
+    return { processed, processStats, upsertStats };
   } catch (error) {
     logger.error(`Error saving events: ${error.message || error}`);
-    await OperationsSchema.findByIdAndUpdate(operationId, {
-      status: 'error',
+    await ParseRunsSchema.findByIdAndUpdate(parseRunId, {
+      status: OPERATION_STATUSES.error,
       errorText: error.message || 'Unknown error while saving events',
-      finish_time: new Date(),
+      finishedAt: new Date(),
     });
     throw error;
   }

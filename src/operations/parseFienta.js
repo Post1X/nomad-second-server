@@ -1,14 +1,14 @@
 import moment from 'moment';
 import puppeteer from 'puppeteer-extra';
 import StealthPlugin from 'puppeteer-extra-plugin-stealth';
-import OperationsSchema from '../schemas/OperationsSchema';
+import ParseRunsSchema from '../schemas/ParseRunsSchema';
 import CitiesSchema from '../schemas/CitiesSchema';
 import FientaPagesSchema from '../schemas/FientaPagesSchema';
 import { EVENT_SOURCE } from '../helpers/constants';
 import { createLoggerWithSource } from '../helpers/logger';
 import saveProcessedEvents from '../helpers/saveProcessedEvents';
-import { processParsedEvents } from '../services/ProcessParsedEventsServices';
-import ParsedEventsSchema from '../schemas/ParsedEventsSchema';
+import logParseRun from '../helpers/logParseRun';
+import createCitySuggestionCollector from '../helpers/createCitySuggestionCollector';
 
 const logger = createLoggerWithSource('PARSE_FIENTA');
 
@@ -22,20 +22,8 @@ const loadCities = async () => {
   return citiesCache.list;
 };
 
-const logProgress = async (operationId, message) => {
-  if (operationId) {
-    try {
-      const operation = await OperationsSchema.findById(operationId);
-      if (operation) {
-        const timestamp = new Date().toISOString();
-        const newLog = `[${timestamp}] ${message}`;
-        operation.infoText = operation.infoText ? `${operation.infoText}\n${newLog}` : newLog;
-        await operation.save();
-      }
-    } catch (e) {
-      logger.error(`Error logging progress: ${e.message || e}`);
-    }
-  }
+const logProgress = async (runId, message) => {
+  await logParseRun(runId, `[${new Date().toISOString()}] ${message}`);
 };
 
 moment.locale('ru');
@@ -468,16 +456,18 @@ const parseEventPage = async (page, url) => {
   }
 };
 
-async function parseFienta({ meta, operationId }) {
+async function parseFienta({ meta = {}, runId, operationId }) {
+  const parseRunId = runId || operationId;
   logger.info('\n========================================');
   logger.info('🚀 НАЧАЛО ПАРСИНГА FIENTA');
   logger.info('========================================');
-  logger.info(`Operation ID: ${operationId}`);
+  logger.info(`Parse run ID: ${parseRunId}`);
   logger.info(`Meta: ${JSON.stringify(meta, null, 2)}`);
   logger.info('========================================\n');
 
   const errorTexts = [];
   const infoLines = [];
+  const citySuggestions = createCitySuggestionCollector(EVENT_SOURCE.fienta);
 
   const {
     adminId,
@@ -502,7 +492,7 @@ async function parseFienta({ meta, operationId }) {
   infoLines.push(
     `Города: всего ${citiesAll.length}, исключено "удаленно/все города": ${excludedRemote}, без ориг. названия: ${excludedNoOriginal}, к обработке: ${afterOriginal.length}`
   );
-  await logProgress(operationId, infoLines[infoLines.length - 1]);
+  await logProgress(parseRunId, infoLines[infoLines.length - 1]);
 
   let cities = afterOriginal;
   if (cityName || cityId) {
@@ -524,16 +514,16 @@ async function parseFienta({ meta, operationId }) {
 
   if (!page) {
     errorTexts.push('Нет необработанных страниц в базе данных');
-    await OperationsSchema.findByIdAndUpdate(operationId, {
+    await ParseRunsSchema.findByIdAndUpdate(parseRunId, {
       status: 'error',
-      finish_time: new Date(),
+      finishedAt: new Date(),
       errorText: errorTexts.join('\n') || '',
       infoText: infoLines.join('\n'),
     });
     return;
   }
 
-  await logProgress(operationId, `Processing page ${page._id}...`);
+  await logProgress(parseRunId, `Processing page ${page._id}...`);
 
   let totalCards = 0;
   let browser;
@@ -576,7 +566,7 @@ async function parseFienta({ meta, operationId }) {
     const CLASSIFICATION_BATCH_SIZE = 100;
 
     logger.info(`\n=== КЛАССИФИКАЦИЯ ВСЕХ СОБЫТИЙ (${totalCards} карточек) ===`);
-    await logProgress(operationId, `Starting classification of ${totalCards} cards...`);
+    await logProgress(parseRunId, `Starting classification of ${totalCards} cards...`);
 
     // Классифицируем все карточки батчами
     for (let batchStart = 0; batchStart < totalCards; batchStart += CLASSIFICATION_BATCH_SIZE) {
@@ -584,7 +574,7 @@ async function parseFienta({ meta, operationId }) {
       const batch = validCards.slice(batchStart, batchEnd);
 
       logger.info(`Классификация батча ${Math.floor(batchStart / CLASSIFICATION_BATCH_SIZE) + 1}/${Math.ceil(totalCards / CLASSIFICATION_BATCH_SIZE)} (${batchStart + 1}-${batchEnd} из ${totalCards})`);
-      await logProgress(operationId, `Classifying batch ${Math.floor(batchStart / CLASSIFICATION_BATCH_SIZE) + 1}/${Math.ceil(totalCards / CLASSIFICATION_BATCH_SIZE)}: ${batchStart + 1}-${batchEnd} of ${totalCards}`);
+      await logProgress(parseRunId, `Classifying batch ${Math.floor(batchStart / CLASSIFICATION_BATCH_SIZE) + 1}/${Math.ceil(totalCards / CLASSIFICATION_BATCH_SIZE)}: ${batchStart + 1}-${batchEnd} of ${totalCards}`);
 
       for (let i = 0; i < batch.length; i += 1) {
         const card = batch[i];
@@ -628,7 +618,7 @@ async function parseFienta({ meta, operationId }) {
     infoLines.push(`Классификация всех ${totalCards} карточек: тип 1 = ${type1Cards.length}, тип 2 = ${type2Cards.length}, тип 3 = ${type3Cards.length}, пропущено = ${skippedCards.length}`);
 
     // Запускаем браузер для парсинга детальных страниц
-    await logProgress(operationId, 'Launching browser for detail pages parsing...');
+    await logProgress(parseRunId, 'Launching browser for detail pages parsing...');
     browser = await puppeteer.launch({
       headless: 'new',
       args: [
@@ -638,14 +628,14 @@ async function parseFienta({ meta, operationId }) {
         '--disable-features=IsolateOrigins,site-per-process',
       ],
     });
-    await logProgress(operationId, 'Browser launched.');
+    await logProgress(parseRunId, 'Browser launched.');
 
     // ЛОГИКА ОБРАБОТКИ ТИПОВ 2 И 3:
     // Для типов 2 и 3 нужно открыть страницу события и собрать ссылки на все серии
 
     const allCardsToProcess = [...type2Cards, ...type3Cards];
     logger.info(`\n=== ОБРАБОТКА ТИПОВ 2 И 3 (${allCardsToProcess.length} событий) ===`);
-    await logProgress(operationId, `Processing types 2 and 3: ${allCardsToProcess.length} events...`);
+    await logProgress(parseRunId, `Processing types 2 and 3: ${allCardsToProcess.length} events...`);
 
     // Структура результатов
     const result = {
@@ -672,7 +662,7 @@ async function parseFienta({ meta, operationId }) {
       const batch = allCardsToProcess.slice(batchStart, batchEnd);
 
       logger.info(`\nОбработка батча ${Math.floor(batchStart / PROCESSING_BATCH_SIZE) + 1}/${Math.ceil(allCardsToProcess.length / PROCESSING_BATCH_SIZE)} (${batchStart + 1}-${batchEnd} из ${allCardsToProcess.length})`);
-      await logProgress(operationId, `Processing batch ${Math.floor(batchStart / PROCESSING_BATCH_SIZE) + 1}/${Math.ceil(allCardsToProcess.length / PROCESSING_BATCH_SIZE)}: ${batchStart + 1}-${batchEnd} of ${allCardsToProcess.length}`);
+      await logProgress(parseRunId, `Processing batch ${Math.floor(batchStart / PROCESSING_BATCH_SIZE) + 1}/${Math.ceil(allCardsToProcess.length / PROCESSING_BATCH_SIZE)}: ${batchStart + 1}-${batchEnd} of ${allCardsToProcess.length}`);
 
       for (let i = 0; i < batch.length; i += 1) {
         const card = batch[i];
@@ -797,7 +787,7 @@ async function parseFienta({ meta, operationId }) {
     // СОЗДАНИЕ МЕРОПРИЯТИЙ
     // ============================================
     logger.info(`\n=== СОЗДАНИЕ МЕРОПРИЯТИЙ ===`);
-    await logProgress(operationId, 'Starting event creation...');
+    await logProgress(parseRunId, 'Starting event creation...');
 
     allEvents = [];
     const citiesList = await loadCities();
@@ -810,7 +800,7 @@ async function parseFienta({ meta, operationId }) {
       const batch = result.links.slice(batchStart, batchEnd);
 
       logger.info(`Обработка типа 1, батч ${Math.floor(batchStart / TYPE1_BATCH_SIZE) + 1}/${Math.ceil(result.links.length / TYPE1_BATCH_SIZE)} (${batchStart + 1}-${batchEnd} из ${result.links.length})`);
-      await logProgress(operationId, `Processing type 1 batch ${Math.floor(batchStart / TYPE1_BATCH_SIZE) + 1}/${Math.ceil(result.links.length / TYPE1_BATCH_SIZE)}: ${batchStart + 1}-${batchEnd} of ${result.links.length}`);
+      await logProgress(parseRunId, `Processing type 1 batch ${Math.floor(batchStart / TYPE1_BATCH_SIZE) + 1}/${Math.ceil(result.links.length / TYPE1_BATCH_SIZE)}: ${batchStart + 1}-${batchEnd} of ${result.links.length}`);
 
       for (let i = 0; i < batch.length; i += 1) {
         const link = batch[i];
@@ -840,6 +830,7 @@ async function parseFienta({ meta, operationId }) {
         // Находим город - функция findCity уже проверяет только последние части адреса
         const city = findCity(citiesList, cleanedLocation);
         if (!city) {
+          citySuggestions.noteFromLocation(cleanedLocation, { source_url: link });
           logger.warn(`  → Пропущено: город не найден для "${cleanedLocation}"`);
           continue;
         }
@@ -884,7 +875,7 @@ async function parseFienta({ meta, operationId }) {
       const batch = type2Groups.slice(batchStart, batchEnd);
 
       logger.info(`Обработка типа 2, батч ${Math.floor(batchStart / TYPE2_BATCH_SIZE) + 1}/${Math.ceil(type2Groups.length / TYPE2_BATCH_SIZE)} (${batchStart + 1}-${batchEnd} из ${type2Groups.length})`);
-      await logProgress(operationId, `Processing type 2 batch ${Math.floor(batchStart / TYPE2_BATCH_SIZE) + 1}/${Math.ceil(type2Groups.length / TYPE2_BATCH_SIZE)}: ${batchStart + 1}-${batchEnd} of ${type2Groups.length}`);
+      await logProgress(parseRunId, `Processing type 2 batch ${Math.floor(batchStart / TYPE2_BATCH_SIZE) + 1}/${Math.ceil(type2Groups.length / TYPE2_BATCH_SIZE)}: ${batchStart + 1}-${batchEnd} of ${type2Groups.length}`);
 
       for (let i = 0; i < batch.length; i += 1) {
         const group = batch[i];
@@ -929,6 +920,7 @@ async function parseFienta({ meta, operationId }) {
         // Находим город - функция findCity уже проверяет только последние части адреса
         const city = findCity(citiesList, cleanedLocation);
         if (!city) {
+          citySuggestions.noteFromLocation(cleanedLocation, { source_url: firstLink });
           logger.warn(`  → Пропущено: город не найден для "${cleanedLocation}"`);
           continue;
         }
@@ -976,7 +968,7 @@ async function parseFienta({ meta, operationId }) {
       const batch = type3Groups.slice(batchStart, batchEnd);
 
       logger.info(`Обработка типа 3, батч ${Math.floor(batchStart / TYPE3_BATCH_SIZE) + 1}/${Math.ceil(type3Groups.length / TYPE3_BATCH_SIZE)} (${batchStart + 1}-${batchEnd} из ${type3Groups.length})`);
-      await logProgress(operationId, `Processing type 3 batch ${Math.floor(batchStart / TYPE3_BATCH_SIZE) + 1}/${Math.ceil(type3Groups.length / TYPE3_BATCH_SIZE)}: ${batchStart + 1}-${batchEnd} of ${type3Groups.length}`);
+      await logProgress(parseRunId, `Processing type 3 batch ${Math.floor(batchStart / TYPE3_BATCH_SIZE) + 1}/${Math.ceil(type3Groups.length / TYPE3_BATCH_SIZE)}: ${batchStart + 1}-${batchEnd} of ${type3Groups.length}`);
 
       for (let i = 0; i < batch.length; i += 1) {
         const group = batch[i];
@@ -1015,6 +1007,7 @@ async function parseFienta({ meta, operationId }) {
           // Находим город - функция findCity уже проверяет только последние части адреса
           const city = findCity(citiesList, cleanedLocation);
           if (!city) {
+            citySuggestions.noteFromLocation(cleanedLocation, { source_url: link });
             logger.warn(`    → Пропущено: город не найден для "${cleanedLocation}"`);
             continue;
           }
@@ -1060,46 +1053,57 @@ async function parseFienta({ meta, operationId }) {
     logger.info(`Тип 3: ${type3Groups.length} групп`);
     logger.info(`=== КОНЕЦ СОЗДАНИЯ МЕРОПРИЯТИЙ ===\n`);
 
-    // Сохранение мероприятий в базу данных
+    let citySuggestionStats = null;
+    try {
+      citySuggestionStats = await citySuggestions.flush();
+      if (citySuggestionStats.candidatesSeen > 0) {
+        infoLines.push(
+          `CitySuggestions: +${citySuggestionStats.created} new, ${citySuggestionStats.updated} updated, `
+          + `${citySuggestionStats.alreadyInDb} already in DB`,
+        );
+      }
+    } catch (e) {
+      errorTexts.push(`CitySuggestions flush failed: ${e?.message || e}`);
+    }
+
     if (allEvents.length > 0) {
-      await logProgress(operationId, `Saving ${allEvents.length} events to database...`);
-
+      await logProgress(parseRunId, `Saving ${allEvents.length} events to database...`);
       try {
-        const { events: processed } = await processParsedEvents(allEvents, EVENT_SOURCE.fienta);
-        const BATCH_SIZE = 10;
-
-        for (let i = 0; i < processed.length; i += BATCH_SIZE) {
-          const batch = processed.slice(i, i + BATCH_SIZE);
-          const batchNumber = Math.floor(i / BATCH_SIZE) + 1;
-
-          await ParsedEventsSchema.insertMany(
-            batch.map(event => ({
-              operation: operationId,
-              event_data: event,
-              batch_number: batchNumber,
-            }))
-          );
-
-          const operation = await OperationsSchema.findById(operationId);
-          await OperationsSchema.findByIdAndUpdate(operationId, {
-            infoText: `${operation?.infoText || ''}\nОбработано ${i + batch.length} из ${processed.length} событий. Батч ${batchNumber} из ${Math.ceil(processed.length / BATCH_SIZE)}`,
-          });
-        }
-
+        const { processed } = await saveProcessedEvents({
+          runId: parseRunId,
+          events: allEvents,
+          source: EVENT_SOURCE.fienta,
+          infoTexts: infoLines,
+          errorTexts,
+          extraStatistics: {
+            page_id: page?._id?.toString() || null,
+            total_cards: totalCards || 0,
+            citySuggestions: citySuggestionStats,
+          },
+        });
         infoLines.push(`Создано и сохранено мероприятий: ${processed.length} (raw ${allEvents.length})`);
-        await logProgress(operationId, `Successfully saved ${processed.length} events`);
+        await logProgress(parseRunId, `Successfully saved ${processed.length} events`);
       } catch (saveError) {
         const saveErrMsg = `Error saving events: ${saveError.message}`;
         errorTexts.push(saveErrMsg);
         logger.error(saveErrMsg);
-        await logProgress(operationId, `ERROR: ${saveErrMsg}`);
+        await logProgress(parseRunId, `ERROR: ${saveErrMsg}`);
       }
     } else {
       infoLines.push('Мероприятия не созданы');
-      await logProgress(operationId, 'No events created');
+      await logProgress(parseRunId, 'No events created');
+      await ParseRunsSchema.findByIdAndUpdate(parseRunId, {
+        status: 'success',
+        finishedAt: new Date(),
+        infoText: infoLines.join('\n'),
+        statistics: JSON.stringify({
+          page_id: page?._id?.toString() || null,
+          total_events: 0,
+          citySuggestions: citySuggestionStats,
+        }),
+      });
     }
 
-    // Помечаем страницу как обработанную
     await FientaPagesSchema.findByIdAndUpdate(page._id, {
       is_processed: true,
       processed_at: new Date(),
@@ -1107,11 +1111,11 @@ async function parseFienta({ meta, operationId }) {
 
     if (browser) {
       await browser.close();
-      await logProgress(operationId, 'Browser closed.');
+      await logProgress(parseRunId, 'Browser closed.');
     }
 
     infoLines.push(`Страница ${page._id} успешно обработана`);
-    await logProgress(operationId, `Page ${page._id} processed successfully`);
+    await logProgress(parseRunId, `Page ${page._id} processed successfully`);
 
   } catch (e) {
     const errorMsg = e?.message || String(e);
@@ -1125,26 +1129,25 @@ async function parseFienta({ meta, operationId }) {
     }
 
     await FientaPagesSchema.findByIdAndUpdate(page._id, {
-      is_processed: true,
-      processed_at: new Date(),
       error_message: errorMsg,
     });
 
-    await logProgress(operationId, `ERROR processing page ${page._id}: ${errorMsg}`);
+    await logProgress(parseRunId, `ERROR processing page ${page._id}: ${errorMsg}`);
   }
 
-  const finalInfoText = infoLines.join('\n');
-  await OperationsSchema.findByIdAndUpdate(operationId, {
-    status: errorTexts.length > 0 ? 'error' : 'success',
-    finish_time: new Date(),
-    errorText: errorTexts.join('\n') || '',
-    infoText: finalInfoText,
-    statistics: JSON.stringify({
-      page_id: page?._id?.toString() || null,
-      total_cards: totalCards || 0,
-      total_events: allEvents?.length || 0,
-    }),
-  });
+  if (errorTexts.length > 0) {
+    await ParseRunsSchema.findByIdAndUpdate(parseRunId, {
+      status: 'error',
+      finishedAt: new Date(),
+      errorText: errorTexts.join('\n') || '',
+      infoText: infoLines.join('\n'),
+      statistics: JSON.stringify({
+        page_id: page?._id?.toString() || null,
+        total_cards: totalCards || 0,
+        total_events: allEvents?.length || 0,
+      }),
+    });
+  }
 }
 
 export default parseFienta;

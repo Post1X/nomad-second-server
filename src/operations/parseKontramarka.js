@@ -1,10 +1,12 @@
 import moment from 'moment';
 import puppeteer from 'puppeteer';
 import CitiesSchema from '../schemas/CitiesSchema';
-import OperationsSchema from '../schemas/OperationsSchema';
+import ParseRunsSchema from '../schemas/ParseRunsSchema';
 import { EVENT_SOURCE } from '../helpers/constants';
 import { createLoggerWithSource } from '../helpers/logger';
 import saveProcessedEvents from '../helpers/saveProcessedEvents';
+import logParseRun from '../helpers/logParseRun';
+import createCitySuggestionCollector from '../helpers/createCitySuggestionCollector';
 
 const logger = createLoggerWithSource('PARSE_KONTRAMARKA');
 
@@ -140,43 +142,6 @@ const formatHoldingDate = (dateArray) => {
   return result;
 };
 
-/** Объединяет дубликаты по (name, address, city_id): один объект на ключ, даты и цены мержатся. */
-const mergeDuplicateEvents = (events) => {
-  if (!events || events.length === 0) return [];
-  const key = (e) => `${String(e.name).trim()}\n${String(e.address).trim()}\n${(e.city_id || '').toString()}`;
-  const byKey = new Map();
-  for (const e of events) {
-    const k = key(e);
-    if (!byKey.has(k)) byKey.set(k, { events: [], dates: [], prices: [] });
-    const g = byKey.get(k);
-    g.events.push(e);
-    const dates = e._mergeDates || (e.date_start ? [e.date_start] : []);
-    g.dates.push(...dates);
-    if (e.min_price != null) g.prices.push(e.min_price);
-    if (e.max_price != null) g.prices.push(e.max_price);
-  }
-  const result = [];
-  for (const g of byKey.values()) {
-    const first = g.events[0];
-    const toTime = (d) => (d && d.getTime ? d.getTime() : (d ? new Date(d).getTime() : null));
-    const validDates = g.dates.map((d) => (d instanceof Date ? d : new Date(d))).filter((d) => !Number.isNaN(d.getTime()));
-    const dateStart = validDates.length ? new Date(Math.min(...validDates.map(toTime))) : null;
-    const dateEnd = validDates.length ? new Date(Math.max(...validDates.map(toTime))) : null;
-    const holdingDateStr = formatHoldingDate(validDates);
-    const ev = {
-      ...first,
-      date_start: dateStart,
-      date_end: dateEnd,
-      holding_date: holdingDateStr,
-      min_price: g.prices.length ? Math.min(...g.prices) : first.min_price,
-      max_price: g.prices.length ? Math.max(...g.prices) : first.max_price,
-    };
-    delete ev._mergeDates;
-    result.push(ev);
-  }
-  return result;
-};
-
 const poolAll = async (items, limit, worker) => {
   const results = [];
   const queue = [...items];
@@ -197,30 +162,19 @@ const loadCities = async () => {
   return citiesCache.gr;
 };
 
-const logProgress = async (operationId, message) => {
-  if (operationId) {
-    try {
-      const operation = await OperationsSchema.findById(operationId);
-      if (operation) {
-        const timestamp = new Date().toISOString();
-        const newLog = `[${timestamp}] ${message}`;
-        operation.infoText = operation.infoText ? `${operation.infoText}\n${newLog}` : newLog;
-        await operation.save();
-      }
-    } catch (e) {
-      logger.error(`Error logging progress: ${e.message || e}`);
-    }
-  }
+const logProgress = async (runId, message) => {
+  await logParseRun(runId, `[${new Date().toISOString()}] ${message}`);
 };
 
 moment.locale('ru');
 
-async function parseKontramarka({ meta, operationId }) {
+async function parseKontramarka({ meta = {}, runId, operationId }) {
+  const parseRunId = runId || operationId;
   const events = [];
   const errorTexts = [];
   const infoTexts = [];
   let allEvents = [];
-  let mergedEvents = [];
+  const citySuggestions = createCitySuggestionCollector(EVENT_SOURCE.kontramarka);
 
   try {
     const {
@@ -236,20 +190,20 @@ async function parseKontramarka({ meta, operationId }) {
       cities = citiesAll.slice(0, maxCities);
     }
 
-    await logProgress(operationId, `Starting Kontramarka parsing. Cities to process: ${cities.length}`);
+    await logProgress(parseRunId, `Starting Kontramarka parsing. Cities to process: ${cities.length}`);
 
     let browser;
     try {
-      await logProgress(operationId, 'Launching browser...');
+      await logProgress(parseRunId, 'Launching browser...');
       browser = await puppeteer.launch({
         headless: 'new',
         args: ['--no-sandbox', '--disable-setuid-sandbox'],
       });
-      await logProgress(operationId, 'Browser launched successfully');
+      await logProgress(parseRunId, 'Browser launched successfully');
     } catch (launchError) {
       const errorMsg = `Failed to launch browser: ${launchError?.message || launchError}`;
       errorTexts.push(errorMsg);
-      await logProgress(operationId, `FATAL ERROR: ${errorMsg}`);
+      await logProgress(parseRunId, `FATAL ERROR: ${errorMsg}`);
       throw new Error(errorMsg);
     }
 
@@ -261,7 +215,7 @@ async function parseKontramarka({ meta, operationId }) {
       let scraped = 0;
       let skippedMissingIds = 0;
       try {
-        await logProgress(operationId, `Processing city: ${cityItem.name} (${url})`);
+        await logProgress(parseRunId, `Processing city: ${cityItem.name} (${url})`);
         await page.goto(url, { waitUntil: 'networkidle2', timeout: 45000 });
         const cards = await page.$$eval('.events__item', (items) => items.map((el) => {
           const title = el.querySelector('.block-title__text')?.textContent?.trim() || '';
@@ -332,9 +286,14 @@ async function parseKontramarka({ meta, operationId }) {
 
               if (!resolvedCityId || !resolvedCountryId) {
                 skippedMissingIds += 1;
-                const skipMsg = `Skip event "${card.title}" – city/country id is missing; provide meta.cityId/meta.countryId or add IDs to DB. [DEBUG targetCity="${slot.cityName || cityItem.name}" matched="${matchedCity?.name || 'null'}" matchedCityId="${matchedCity?._id || '-'}" matchedCountryId="${matchedCity?.country_id || '-'}" providedCityId="${cityId || '-'}" providedCountryId="${countryId || '-'}"]`;
+                const targetCityName = slot.cityName || cityItem.name;
+                citySuggestions.note(targetCityName, {
+                  slug: buildCitySlug(targetCityName),
+                  source_url: tourUrl || url,
+                });
+                const skipMsg = `Skip event "${card.title}" – city/country id is missing; provide meta.cityId/meta.countryId or add IDs to DB. [DEBUG targetCity="${targetCityName}" matched="${matchedCity?.name || 'null'}" matchedCityId="${matchedCity?._id || '-'}" matchedCountryId="${matchedCity?.country_id || '-'}" providedCityId="${cityId || '-'}" providedCountryId="${countryId || '-'}"]`;
                 infoTexts.push(skipMsg);
-                await logProgress(operationId, `INFO: ${skipMsg}`);
+                await logProgress(parseRunId, `INFO: ${skipMsg}`);
                 continue;
               }
 
@@ -401,7 +360,7 @@ async function parseKontramarka({ meta, operationId }) {
           } catch (detailErr) {
             const errMsg = `Error opening tour ${tourUrl}: ${detailErr?.message || detailErr}`;
             infoTexts.push(errMsg);
-            await logProgress(operationId, `WARNING: ${errMsg}`);
+            await logProgress(parseRunId, `WARNING: ${errMsg}`);
           } finally {
             await detail.close();
           }
@@ -410,16 +369,16 @@ async function parseKontramarka({ meta, operationId }) {
         if (!cards.length) {
           const noEventsMsg = `No events found on page for city ${cityItem.name} (${url})`;
           infoTexts.push(noEventsMsg);
-          await logProgress(operationId, `INFO: ${noEventsMsg}`);
+          await logProgress(parseRunId, `INFO: ${noEventsMsg}`);
         } else {
           const cityStats = `City ${cityItem.name}: scraped ${scraped}, skippedMissingIds ${skippedMissingIds}, added ${cityEvents.length}`;
           infoTexts.push(cityStats);
-          await logProgress(operationId, cityStats);
+          await logProgress(parseRunId, cityStats);
         }
       } catch (e) {
         const errMsg = `Error for city ${cityItem.name}: ${e?.message || e}`;
         infoTexts.push(errMsg);
-        await logProgress(operationId, `WARNING: ${errMsg}`);
+        await logProgress(parseRunId, `WARNING: ${errMsg}`);
       } finally {
         await page.close();
       }
@@ -429,30 +388,41 @@ async function parseKontramarka({ meta, operationId }) {
     allEvents = await poolAll(cities, 3, processCity);
 
     await browser.close();
-    await logProgress(operationId, 'Browser closed');
-
-    mergedEvents = mergeDuplicateEvents(allEvents || []);
-    await logProgress(operationId, `Parsing completed. Total: ${mergedEvents.length} events (after merging duplicates)`);
+    await logProgress(parseRunId, 'Browser closed');
+    await logProgress(parseRunId, `Parsing completed. Total: ${(allEvents || []).length} events`);
   } catch (e) {
     const errMsg = e?.message || 'Unknown error while parsing Kontramarka';
     errorTexts.push(errMsg);
-    await logProgress(operationId, `FATAL ERROR: ${errMsg}`);
+    await logProgress(parseRunId, `FATAL ERROR: ${errMsg}`);
   }
 
-  const eventsToSave = mergedEvents.length ? mergedEvents : (allEvents || []);
+  let citySuggestionStats = null;
+  try {
+    citySuggestionStats = await citySuggestions.flush();
+    if (citySuggestionStats.candidatesSeen > 0) {
+      infoTexts.push(
+        `CitySuggestions: +${citySuggestionStats.created} new, ${citySuggestionStats.updated} updated, `
+        + `${citySuggestionStats.alreadyInDb} already in DB`,
+      );
+    }
+  } catch (e) {
+    errorTexts.push(`CitySuggestions flush failed: ${e?.message || e}`);
+  }
+
   try {
     await saveProcessedEvents({
-      operationId,
-      events: eventsToSave,
+      runId: parseRunId,
+      events: allEvents || [],
       source: EVENT_SOURCE.kontramarka,
       infoTexts,
       errorTexts,
+      extraStatistics: { citySuggestions: citySuggestionStats },
     });
   } catch (error) {
-    await OperationsSchema.findByIdAndUpdate(operationId, {
+    await ParseRunsSchema.findByIdAndUpdate(parseRunId, {
       status: 'error',
       errorText: error.message || 'Unknown error while saving events',
-      finish_time: new Date(),
+      finishedAt: new Date(),
     });
   }
 }

@@ -97,7 +97,8 @@ const callOpenAi = async (systemPrompt, userContent) => {
           }
           const parsed = JSON.parse(data);
           const content = parsed?.choices?.[0]?.message?.content || '';
-          resolve(content);
+          const usage = parsed?.usage || {};
+          resolve({ content, usage });
         } catch (e) {
           reject(e);
         }
@@ -128,12 +129,20 @@ const parseAiResults = (content) => {
 
 export async function categorizeEventsWithAi(events) {
   const map = new Map();
-  if (!events?.length) return map;
+  const usageTotals = {
+    prompt_tokens: 0,
+    completion_tokens: 0,
+    total_tokens: 0,
+    batches: 0,
+    failedBatches: 0,
+  };
+
+  if (!events?.length) return { map, usage: usageTotals };
 
   if (!ENV.OPENAI_API_KEY) {
     logger.warn('OPENAI_API_KEY missing — skip AI categorization');
     events.forEach((e) => map.set(e.tempId, null));
-    return map;
+    return { map, usage: usageTotals };
   }
 
   const { prompt } = await rebuildAiPromptIfNeeded();
@@ -174,7 +183,12 @@ export async function categorizeEventsWithAi(events) {
     })).join('\n');
 
     try {
-      const content = await callOpenAi(prompt, userContent);
+      const { content, usage } = await callOpenAi(prompt, userContent);
+      usageTotals.prompt_tokens += usage.prompt_tokens || 0;
+      usageTotals.completion_tokens += usage.completion_tokens || 0;
+      usageTotals.total_tokens += usage.total_tokens || 0;
+      usageTotals.batches += 1;
+
       const results = parseAiResults(content);
       const byId = new Map(results.map((r) => [r.id, r.categoryId]));
 
@@ -187,11 +201,13 @@ export async function categorizeEventsWithAi(events) {
       }
     } catch (e) {
       logger.error(`AI batch ${i + 1}/${batches.length} failed: ${e.message}`);
+      usageTotals.failedBatches += 1;
       batch.forEach((ev) => map.set(ev.tempId, null));
     }
   }
 
-  return map;
+  logger.info(`OpenAI usage: ${JSON.stringify(usageTotals)}`);
+  return { map, usage: usageTotals };
 }
 
 export default {

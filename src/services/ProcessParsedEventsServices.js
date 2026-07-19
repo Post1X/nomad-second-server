@@ -1,13 +1,23 @@
 import crypto from 'crypto';
-import mergeDuplicateEvents from '../helpers/mergeDuplicateEvents';
+import EventsCategoriesSchema from '../schemas/EventsCategoriesSchema';
+import { mergeDuplicateEventsForSource } from '../helpers/merge';
 import { detectCategoryByKeywords } from './CategoryKeywordServices';
 import { categorizeEventsWithAi } from './AiCategoryServices';
 import { createLoggerWithSource } from '../helpers/logger';
 
 const logger = createLoggerWithSource('PROCESS_EVENTS');
 
+let otherCategoryIdCache = null;
+
+async function getOtherCategoryId() {
+  if (otherCategoryIdCache) return otherCategoryIdCache;
+  const other = await EventsCategoriesSchema.findOne({ name: 'Другое' }).lean();
+  otherCategoryIdCache = other?._id ? String(other._id) : null;
+  return otherCategoryIdCache;
+}
+
 export async function processParsedEvents(rawEvents, source) {
-  const merged = mergeDuplicateEvents(rawEvents || []);
+  const merged = mergeDuplicateEventsForSource(rawEvents || [], source);
   logger.info(`Merge: ${rawEvents?.length || 0} → ${merged.length} (source=${source})`);
 
   let categorizedByKeywords = 0;
@@ -48,8 +58,11 @@ export async function processParsedEvents(rawEvents, source) {
     }
   }
 
+  let openaiUsage = null;
   if (needsAi.length) {
-    const aiMap = await categorizeEventsWithAi(needsAi);
+    const { map: aiMap, usage } = await categorizeEventsWithAi(needsAi);
+    openaiUsage = usage;
+    const otherId = await getOtherCategoryId();
     for (const item of needsAi) {
       const catId = aiMap.get(item.tempId);
       const ev = merged[item.index];
@@ -57,9 +70,14 @@ export async function processParsedEvents(rawEvents, source) {
         ev.events_category_id = catId;
         ev.category_resolved_by = 'ai';
         categorizedByAi += 1;
+      } else if (otherId) {
+        ev.events_category_id = otherId;
+        ev.category_resolved_by = 'default_other';
+        ev.category_ai_failed = true;
+        noCategoryAfterAi += 1;
       } else {
         ev.events_category_id = null;
-        ev.category_resolved_by = null;
+        ev.category_resolved_by = 'default_other';
         ev.category_ai_failed = true;
         noCategoryAfterAi += 1;
       }
@@ -75,6 +93,7 @@ export async function processParsedEvents(rawEvents, source) {
     categorizedByAi,
     noCategoryAfterAi,
     noCity,
+    openaiUsage,
   };
 
   logger.info(`Process stats (${source}): ${JSON.stringify(stats)}`);
