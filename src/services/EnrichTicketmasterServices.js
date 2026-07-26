@@ -1,6 +1,14 @@
 import https from 'https';
 import { ENV } from '../helpers/constants';
 import { createLoggerWithSource } from '../helpers/logger';
+import {
+  hasSufficientTicketmasterText,
+  pickTicketmasterBodyText,
+  TM_MIN_DESCRIPTION_LENGTH,
+} from '../helpers/ticketmasterDescription';
+
+// re-export for callers / tests
+export { TM_MIN_DESCRIPTION_LENGTH, hasSufficientTicketmasterText };
 
 const logger = createLoggerWithSource('ENRICH_TM');
 const DISCOVERY_BASE = 'https://app.ticketmaster.com/discovery/v2';
@@ -33,18 +41,8 @@ const fetchJson = (url, headers = {}) => new Promise((resolve, reject) => {
   });
 });
 
-const pickDescription = (event) => {
-  const candidates = [
-    event?.description,
-    event?.info,
-    event?.pleaseNote,
-    event?.name,
-  ].map((s) => String(s || '').trim()).filter(Boolean);
-  // prefer longest non-name-only text
-  const name = String(event?.name || '').trim();
-  const better = candidates.find((c) => c !== name && c.length > name.length + 20);
-  return better || candidates[0] || '';
-};
+/** Body text only (no name fallback) — name-only is treated as missing. */
+const pickDescription = (event) => pickTicketmasterBodyText(event);
 
 const pickPrices = (event) => {
   const ranges = event?.priceRanges || [];
@@ -178,6 +176,7 @@ export async function enrichFromTicketmaster(items = []) {
         ticketmaster_id: tmId,
         found: true,
         enriched,
+        sufficient_description: hasSufficientTicketmasterText(event),
         name: event.name || item.name || '',
         description,
         website,
