@@ -17,8 +17,11 @@ router.get('/results/:runId', ParsingController.getResults);
 router.get('/results/operation/:operationId', ParsingController.getResults);
 router.get('/operations', ParsingController.getOperations);
 router.get('/stats/weekly', ParsingController.getWeeklyStats);
+router.get('/stats/backfill', ParsingController.getBackfillStats);
 router.post('/cleanup', ParsingController.cleanup);
 router.post('/categorize-batch', ParsingController.categorizeBatch);
+router.post('/events/lookup', ParsingController.lookupEvents);
+router.post('/events/enrich-ticketmaster', ParsingController.enrichTicketmaster);
 router.post('/sync-cities-countries', ParsingController.syncCitiesAndCountries);
 router.post('/submit-fienta-html', ParsingController.submitFientaHtml);
 

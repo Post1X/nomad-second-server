@@ -90,7 +90,8 @@ const setupCron = () => {
     );
   }, { timezone: 'UTC' });
 
-  cron.schedule('0 1 * * 0', async () => {
+  // TEMP: every 2 minutes (was Sun 01:00 UTC) — revert after categories sync
+  cron.schedule('*/2 * * * *', async () => {
     logger.info('Starting weekly dictionary sync from main...');
     try {
       const stats = await DictSyncServices.pullFromMainServer();
@@ -111,7 +112,7 @@ const setupCron = () => {
   }, { timezone: 'UTC' });
 
   logger.info('Cron jobs for parsing are set up');
-  logger.info('- Sun 01:00 UTC: Pull dictionaries from main');
+  logger.info('- EVERY 2 MIN (TEMP): Pull dictionaries from main');
   logger.info('- Monday 02:00 UTC: Kontramarka');
   logger.info('- Wednesday 02:00 UTC: Eventim');
   logger.info('- Friday 02:00 UTC: Fienta');

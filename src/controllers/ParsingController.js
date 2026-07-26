@@ -4,10 +4,15 @@ import ParsedEventsSchema from '../schemas/ParsedEventsSchema';
 import CitiesSchema from '../schemas/CitiesSchema';
 import CountriesSchema from '../schemas/CountriesSchema';
 import FientaPagesSchema from '../schemas/FientaPagesSchema';
+import EventsCategoriesSchema from '../schemas/EventsCategoriesSchema';
 import CleanupServices from '../services/CleanupServices';
 import StatsServices from '../services/StatsServices';
+import BackfillStatsServices from '../services/BackfillStatsServices';
 import CityDiscoveryServices from '../services/CityDiscoveryServices';
 import { categorizeBatch } from '../services/CategorizeBatchServices';
+import { lookupParsedEvents } from '../services/LookupParsedEventsServices';
+import { enrichFromTicketmaster } from '../services/EnrichTicketmasterServices';
+import { rebuildAiPromptIfNeeded } from '../services/AiCategoryServices';
 import {
   EVENT_SOURCE,
   EXPIRED_EVENTS_CLEANUP_MONTHS,
@@ -275,22 +280,105 @@ class ParsingController {
 
   static categorizeBatch = async (req, res, next) => {
     try {
-      const { events, source = 'backfill' } = req.body || {};
+      const {
+        events,
+        source = 'backfill',
+        purpose,
+        persist,
+        meta,
+      } = req.body || {};
       if (!Array.isArray(events) || !events.length) {
         return res.status(400).json({
           status: 'error',
           message: 'events array is required',
         });
       }
-      if (events.length > 200) {
+      if (events.length > 500) {
         return res.status(400).json({
           status: 'error',
-          message: 'At most 200 events per request',
+          message: 'At most 500 events per request',
         });
       }
 
-      const results = await categorizeBatch(events, source);
+      const out = await categorizeBatch(events, source, {
+        purpose: purpose || (source === 'backfill' ? 'backfill' : undefined),
+        persist,
+        meta,
+      });
+      res.json({
+        status: 'ok',
+        results: out.results,
+        openaiUsage: out.openaiUsage,
+        statistics: out.statistics,
+        runId: out.runId,
+      });
+    } catch (error) {
+      next(error);
+    }
+  };
+
+  static lookupEvents = async (req, res, next) => {
+    try {
+      const { items, events } = req.body || {};
+      const list = Array.isArray(items) ? items : (Array.isArray(events) ? events : null);
+      if (!list?.length) {
+        return res.status(400).json({
+          status: 'error',
+          message: 'items (or events) array is required',
+        });
+      }
+      if (list.length > 500) {
+        return res.status(400).json({
+          status: 'error',
+          message: 'At most 500 items per request',
+        });
+      }
+      const results = await lookupParsedEvents(list);
       res.json({ status: 'ok', results });
+    } catch (error) {
+      next(error);
+    }
+  };
+
+  static enrichTicketmaster = async (req, res, next) => {
+    try {
+      const { items, events } = req.body || {};
+      const list = Array.isArray(items) ? items : (Array.isArray(events) ? events : null);
+      if (!list?.length) {
+        return res.status(400).json({
+          status: 'error',
+          message: 'items (or events) array is required',
+        });
+      }
+      if (list.length > 100) {
+        return res.status(400).json({
+          status: 'error',
+          message: 'At most 100 items per request',
+        });
+      }
+      const results = await enrichFromTicketmaster(list);
+      res.json({ status: 'ok', results });
+    } catch (error) {
+      next(error);
+    }
+  };
+
+  static getBackfillStats = async (req, res, next) => {
+    try {
+      const { source, sources, from, to } = req.query;
+      const sourceList = sources
+        ? String(sources).split(',').map((s) => s.trim()).filter(Boolean)
+        : undefined;
+      const stats = await BackfillStatsServices.getBackfillStats({
+        source,
+        sources: sourceList,
+        from,
+        to,
+      });
+      res.json({
+        status: 'ok',
+        ...stats,
+      });
     } catch (error) {
       next(error);
     }
@@ -298,7 +386,12 @@ class ParsingController {
 
   static syncCitiesAndCountries = async (req, res, next) => {
     try {
-      const { countries = [], cities = [], replaceAll = false } = req.body;
+      const {
+        countries = [],
+        cities = [],
+        eventCategories = [],
+        replaceAll = false,
+      } = req.body;
 
       if (!Array.isArray(countries) || !Array.isArray(cities)) {
         return res.status(400).json({
@@ -306,11 +399,18 @@ class ParsingController {
           message: 'countries and cities must be arrays',
         });
       }
+      if (eventCategories != null && !Array.isArray(eventCategories)) {
+        return res.status(400).json({
+          status: 'error',
+          message: 'eventCategories must be an array when provided',
+        });
+      }
 
       let countriesCreated = 0;
       let citiesCreated = 0;
       let countriesDeleted = 0;
       let citiesDeleted = 0;
+      let categoriesUpserted = 0;
 
       if (replaceAll) {
         const deleteCountriesResult = await CountriesSchema.deleteMany({});
@@ -386,12 +486,38 @@ class ParsingController {
         }
       }
 
+      if (Array.isArray(eventCategories) && eventCategories.length > 0) {
+        for (const cat of eventCategories) {
+          if (!cat?._id) continue;
+          // eslint-disable-next-line no-await-in-loop
+          await EventsCategoriesSchema.findByIdAndUpdate(
+            cat._id,
+            {
+              $set: {
+                name: cat.name,
+                sort: cat.sort ?? 999,
+              },
+            },
+            { upsert: true, setDefaultsOnInsert: true },
+          );
+          categoriesUpserted += 1;
+        }
+        const remoteIds = new Set(eventCategories.map((c) => String(c._id)));
+        const local = await EventsCategoriesSchema.find({}).select('_id').lean();
+        const toDelete = local.filter((c) => !remoteIds.has(String(c._id))).map((c) => c._id);
+        if (toDelete.length) {
+          await EventsCategoriesSchema.deleteMany({ _id: { $in: toDelete } });
+        }
+        await rebuildAiPromptIfNeeded();
+      }
+
       res.json({
         status: 'ok',
         message: 'Sync completed',
         statistics: {
           countries: { created: countriesCreated, deleted: countriesDeleted },
           cities: { created: citiesCreated, deleted: citiesDeleted },
+          eventCategories: { upserted: categoriesUpserted },
         },
       });
     } catch (error) {
@@ -543,3 +669,4 @@ class ParsingController {
 }
 
 export default ParsingController;
+

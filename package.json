@@ -8,7 +8,8 @@
     "clean": "rm -rf dist",
     "build": "yarn clean && babel ./src --out-dir dist --copy-files",
     "prod": "yarn build && node -r dotenv/config ./dist/bin/www",
-    "parse:ticketmaster": "babel-node -r dotenv/config scripts/runTicketmasterParsing.js"
+    "parse:ticketmaster": "babel-node -r dotenv/config scripts/runTicketmasterParsing.js",
+    "test:merge": "babel-node -r dotenv/config scripts/testMergeLogic.js"
   },
   "dependencies": {
     "cheerio": "^1.0.0",

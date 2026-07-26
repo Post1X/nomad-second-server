@@ -177,6 +177,80 @@
     .tabs button { background: var(--chip); color: var(--text); border-color: var(--border); font-weight: 500; }
     .tabs button.active { background: var(--accent); color: #041018; font-weight: 650; }
     .hidden { display: none !important; }
+    .event-cards-panel {
+      margin-top: 12px;
+      padding: 14px;
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      background: var(--panel);
+    }
+    .event-cards {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
+      gap: 14px;
+      margin-top: 12px;
+    }
+    .event-card {
+      background: var(--panel2);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 0;
+      overflow: hidden;
+    }
+    .event-card .ec-row {
+      display: grid;
+      grid-template-columns: 110px 1fr;
+      gap: 10px;
+      padding: 10px 14px;
+      border-bottom: 1px solid var(--border);
+      align-items: start;
+    }
+    .event-card .ec-row:last-child { border-bottom: none; }
+    .event-card .ec-label {
+      color: var(--muted);
+      font-size: 0.75rem;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+      padding-top: 2px;
+    }
+    .event-card .ec-value {
+      font-size: 0.9rem;
+      line-height: 1.4;
+      word-break: break-word;
+    }
+    .event-card .ec-value.name { font-weight: 650; font-size: 1rem; }
+    .event-card .ec-value.desc {
+      color: var(--text);
+      white-space: pre-wrap;
+      max-height: 9.5em;
+      overflow: auto;
+    }
+    .event-card .ec-value.mono { font-family: var(--mono); font-size: 0.8rem; color: var(--muted); }
+    .event-card .meta {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      font-size: 0.75rem;
+    }
+    .event-card .pill {
+      display: inline-block;
+      padding: 2px 8px;
+      border-radius: 999px;
+      background: var(--chip);
+      border: 1px solid var(--border);
+      color: var(--text);
+    }
+    .event-card .pill.kw { border-color: rgba(110,192,255,.45); color: #9fd2ff; }
+    .event-card .pill.ai { border-color: rgba(126,224,176,.45); color: #7ee0b0; }
+    .event-card .pill.other { border-color: rgba(230,162,60,.45); color: #f0c878; }
+    .event-card .pill.enrich { border-color: rgba(180,140,255,.45); color: #cbb6ff; }
+    .event-card a.link {
+      color: var(--accent);
+      font-size: 0.85rem;
+      word-break: break-all;
+      text-decoration: none;
+    }
+    .event-card a.link:hover { text-decoration: underline; }
     .range-label { font-family: var(--mono); font-size: 0.85rem; color: var(--muted); }
     tr.run-row { cursor: pointer; }
     tr.run-row.active td { background: rgba(61, 156, 240, 0.12); }
@@ -272,7 +346,7 @@
   <header>
     <div>
       <h1>Статистика парсинга</h1>
-      <div class="sub">События · ParseRuns · города-кандидаты (discover / approve → main)</div>
+      <div class="sub">События · ParseRuns · Backfill · города-кандидаты (discover / approve → main)</div>
     </div>
     <div class="range-label" id="rangeLabel">—</div>
   </header>
@@ -330,6 +404,7 @@
         <button type="button" data-tab="geo">Страны / города</button>
         <button type="button" data-tab="cats">Категории</button>
         <button type="button" data-tab="runs">ParseRuns</button>
+        <button type="button" data-tab="backfill">Backfill</button>
         <button type="button" data-tab="cities">Города-кандидаты</button>
       </div>
 
@@ -397,6 +472,62 @@
         <div id="runDetail" class="run-detail hidden"></div>
       </div>
 
+      <div id="tab-backfill" class="hidden">
+        <div class="muted" style="margin-bottom:12px;font-size:0.88rem">
+          Статистика прогонов <code>categorize-batch</code> (purpose=backfill) за тот же период и источники, что в фильтрах сверху.
+          Показывает keywords / ai / default_other, обогащение description с ParsedEvents.
+        </div>
+        <section class="cards" id="bfCards"></section>
+        <div class="grid2" style="margin-top:8px">
+          <div>
+            <h3>События по источникам</h3>
+            <div class="bar-wrap" id="bfOverviewSources"></div>
+          </div>
+          <div>
+            <h3>Как определена категория</h3>
+            <div class="bar-wrap" id="bfOverviewResolved"></div>
+            <h3 style="margin-top:16px">Проблемные</h3>
+            <div class="bar-wrap" id="bfOverviewProblems"></div>
+          </div>
+        </div>
+        <h3 style="margin-top:18px">По источникам</h3>
+        <div id="bfSourceTables"></div>
+        <div class="grid2" style="margin-top:12px">
+          <div>
+            <h3>Страны (top)</h3>
+            <div class="bar-wrap" id="bfGeoCountries"></div>
+          </div>
+          <div>
+            <h3>Города (top)</h3>
+            <div class="bar-wrap" id="bfGeoCities"></div>
+          </div>
+        </div>
+        <div class="grid2" style="margin-top:12px">
+          <div>
+            <h3>Категории (сводка)</h3>
+            <div class="bar-wrap" id="bfCatBars"></div>
+          </div>
+          <div>
+            <h3>Таблица категорий</h3>
+            <div id="bfCatTable"></div>
+          </div>
+        </div>
+        <h3 style="margin-top:18px">Backfill runs</h3>
+        <div class="muted" style="margin-bottom:8px;font-size:0.85rem">Кликни run — фильтр карточек по этому прогону. «Все» сбрасывает.</div>
+        <div id="bfRunsTable"></div>
+        <section class="event-cards-panel">
+          <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+            <h3 style="margin:0">Карточки событий</h3>
+            <button type="button" class="secondary" id="bfCardsShowAll">Все</button>
+            <span class="muted mono" id="bfCardsFilterLabel"></span>
+          </div>
+          <div class="muted" style="margin-top:6px;font-size:0.82rem">
+            Отдельные поля: название, описание, дата, цена, адрес, категория, ссылка, id.
+          </div>
+          <div id="bfEventCards" class="event-cards"></div>
+        </section>
+      </div>
+
       <div id="tab-cities" class="hidden">
         <div class="muted" style="margin-bottom:12px;font-size:0.88rem">
           Frankfurt ≠ Frankfurt am Main. Страна и координаты вручную. Approve создаёт город на main и second, кандидат удаляется.
@@ -452,10 +583,12 @@
   <script>
     const SOURCES = ['kontramarka', 'fienta', 'eventim', 'ticketmaster', 'israelinfo'];
     const $ = (id) => document.getElementById(id);
-    const TABS = ['overview', 'sources', 'geo', 'cats', 'runs', 'cities'];
+    const TABS = ['overview', 'sources', 'geo', 'cats', 'runs', 'backfill', 'cities'];
 
     const state = {
       stats: null,
+      backfillStats: null,
+      bfSelectedRunId: null,
       runs: [],
       selectedRunId: null,
       countries: [],
@@ -532,7 +665,17 @@
       localStorage.setItem('nomad_stats_key', $('apiKey').value.trim());
     }
     function loadCreds() {
-      $('baseUrl').value = localStorage.getItem('nomad_stats_base') || window.location.origin;
+      const origin = window.location.origin.replace(/\/$/, '');
+      const saved = (localStorage.getItem('nomad_stats_base') || '').replace(/\/$/, '');
+      // Stats-UI is served by second-server: prefer current host over a stale remote in localStorage
+      // (common cause of empty Backfill — local runs, Base URL still pointing at prod).
+      const savedIsLocal = /localhost|127\.0\.0\.1/.test(saved);
+      const originIsLocal = /localhost|127\.0\.0\.1/.test(origin);
+      if (originIsLocal && saved && !savedIsLocal) {
+        $('baseUrl').value = origin;
+      } else {
+        $('baseUrl').value = saved || origin;
+      }
       $('apiKey').value = localStorage.getItem('nomad_stats_key') || '';
     }
 
@@ -647,6 +790,200 @@
             ${list.map((r) => `<tr><td>${escapeHtml(r.name)}</td><td class="mono">${escapeHtml(r.id)}</td><td class="mono">${r.count}</td></tr>`).join('')}
           </tbody>
         </table>` : '<div class="empty">Нет данных</div>';
+    }
+
+    function renderBackfillCards(summary) {
+      const pct = (a, b) => (b ? Math.round((a / b) * 1000) / 10 : 0);
+      const ai = summary.openaiUsage || {};
+      $('bfCards').innerHTML = `
+        <div class="card ok"><div class="k">Всего (backfill)</div><div class="v">${summary.total || 0}</div><div class="muted mono">runs=${summary.runs || 0}</div></div>
+        <div class="card warn"><div class="k">Без категории («Другое»/fail)</div><div class="v">${summary.noCategory || 0}</div><div class="muted mono">${pct(summary.noCategory, summary.total)}%</div></div>
+        <div class="card warn"><div class="k">После AI без категории</div><div class="v">${summary.noCategoryAfterAi || 0}</div></div>
+        <div class="card danger"><div class="k">Без города</div><div class="v">${summary.noCity || 0}</div><div class="muted mono">${pct(summary.noCity, summary.total)}%</div></div>
+        <div class="card"><div class="k">Desc обогащено</div><div class="v">${summary.enrichedDescriptions || 0}</div></div>
+        <div class="card"><div class="k">OpenAI tokens</div><div class="v mono" style="font-size:1.1rem">${ai.total_tokens ?? '—'}</div>
+          <div class="muted mono">in=${ai.prompt_tokens ?? 0} out=${ai.completion_tokens ?? 0}</div></div>
+      `;
+    }
+
+    function resolvedPillClass(by) {
+      if (by === 'keywords') return 'kw';
+      if (by === 'ai') return 'ai';
+      if (by === 'default_other') return 'other';
+      return '';
+    }
+
+    function formatCardDate(c) {
+      if (c.holding_date) return c.holding_date;
+      const a = c.date_start ? new Date(c.date_start) : null;
+      const b = c.date_end ? new Date(c.date_end) : null;
+      const fmt = (d) => (d && !Number.isNaN(d.getTime())
+        ? d.toLocaleString('ru-RU', { dateStyle: 'medium', timeStyle: 'short' })
+        : '');
+      const sa = fmt(a);
+      const sb = fmt(b);
+      if (sa && sb && sa !== sb) return `${sa} — ${sb}`;
+      return sa || sb || '—';
+    }
+
+    function formatCardPrice(c) {
+      const cur = c.currency ? ` ${c.currency}` : '';
+      if (c.min_price != null && c.max_price != null) {
+        if (c.min_price === c.max_price) return `${c.min_price}${cur}`;
+        return `${c.min_price} – ${c.max_price}${cur}`;
+      }
+      if (c.min_price != null) return `от ${c.min_price}${cur}`;
+      if (c.max_price != null) return `до ${c.max_price}${cur}`;
+      return '—';
+    }
+
+    function renderBfEventCards(cards) {
+      const el = $('bfEventCards');
+      if (!cards?.length) {
+        el.innerHTML = '<div class="empty">Нет карточек за период (нужен новый backfill с полями в run)</div>';
+        return;
+      }
+      el.innerHTML = cards.map((c) => {
+        const desc = (c.description || '').trim() || '—';
+        const link = c.website
+          ? `<a class="link" href="${escapeHtml(c.website)}" target="_blank" rel="noopener">${escapeHtml(c.website)}</a>`
+          : '—';
+        const geo = [c.city_name, c.country_name].filter((x) => x && x !== '—').join(', ') || '—';
+        const ids = [
+          c.event_id ? `event ${c.event_id}` : '',
+          c.ticketmaster_id ? `tm ${c.ticketmaster_id}` : '',
+          c.run_id ? `run ${c.run_id}` : '',
+        ].filter(Boolean).join('\n') || '—';
+        return `<article class="event-card">
+          <div class="ec-row"><div class="ec-label">Название</div><div class="ec-value name">${escapeHtml(c.name || '—')}</div></div>
+          <div class="ec-row"><div class="ec-label">Описание</div><div class="ec-value desc">${escapeHtml(desc)}</div></div>
+          <div class="ec-row"><div class="ec-label">Дата</div><div class="ec-value">${escapeHtml(formatCardDate(c))}</div></div>
+          <div class="ec-row"><div class="ec-label">Цена</div><div class="ec-value">${escapeHtml(formatCardPrice(c))}</div></div>
+          <div class="ec-row"><div class="ec-label">Адрес</div><div class="ec-value">${escapeHtml(c.address || '—')}</div></div>
+          <div class="ec-row"><div class="ec-label">Гео</div><div class="ec-value">${escapeHtml(geo)}</div></div>
+          <div class="ec-row"><div class="ec-label">Категория</div><div class="ec-value">
+            <div class="meta">
+              <span class="pill">${escapeHtml(c.category_name || '—')}</span>
+              <span class="pill ${resolvedPillClass(c.resolved_by)}">${escapeHtml(c.resolved_by || '—')}</span>
+              <span class="pill">${escapeHtml(c.source || '—')}</span>
+              ${c.enriched_description ? '<span class="pill enrich">desc+</span>' : ''}
+              ${c.specialization ? `<span class="pill">${escapeHtml(c.specialization)}</span>` : ''}
+            </div>
+          </div></div>
+          <div class="ec-row"><div class="ec-label">Ссылка</div><div class="ec-value">${link}</div></div>
+          <div class="ec-row"><div class="ec-label">ID</div><div class="ec-value mono">${escapeHtml(ids)}</div></div>
+        </article>`;
+      }).join('');
+    }
+
+    function refreshBfEventCards() {
+      const stats = state.backfillStats;
+      if (!stats) {
+        renderBfEventCards([]);
+        return;
+      }
+      let cards = stats.eventCards || [];
+      if (state.bfSelectedRunId) {
+        const run = (stats.backfillRuns || []).find((r) => String(r._id) === String(state.bfSelectedRunId));
+        cards = run?.results || [];
+        $('bfCardsFilterLabel').textContent = `run ${state.bfSelectedRunId} · ${cards.length}`;
+      } else {
+        $('bfCardsFilterLabel').textContent = `все · ${cards.length}`;
+      }
+      renderBfEventCards(cards);
+    }
+
+    function renderBackfill(stats) {
+      if (!stats || !(stats.summary?.total)) {
+        $('bfCards').innerHTML = `<div class="empty">
+          Нет данных backfill за выбранный период.<br/>
+          Сейчас в БД прогоны за <b>текущую</b> неделю — нажми пресет «Текущая неделя» или «7 дней» и Загрузить.
+        </div>`;
+        $('bfRunsTable').innerHTML = '';
+        $('bfSourceTables').innerHTML = '';
+        ['bfOverviewSources','bfOverviewResolved','bfOverviewProblems','bfGeoCountries','bfGeoCities','bfCatBars','bfCatTable']
+          .forEach((id) => { const n = $(id); if (n) n.innerHTML = ''; });
+        renderBfEventCards([]);
+        return;
+      }
+      const summary = stats.summary || {};
+      renderBackfillCards(summary);
+
+      const srcRows = Object.entries(stats.bySource || {}).map(([name, row]) => ({ name, id: name, count: row.total || 0 }));
+      srcRows.sort((a, b) => b.count - a.count);
+      $('bfOverviewSources').innerHTML = bars(srcRows, null, 'alt');
+      $('bfOverviewResolved').innerHTML = bars(summary.resolvedBy || [], null);
+      $('bfOverviewProblems').innerHTML = bars([
+        { name: 'noCategory', count: summary.noCategory || 0 },
+        { name: 'noCategoryAfterAi', count: summary.noCategoryAfterAi || 0 },
+        { name: 'noCity', count: summary.noCity || 0 },
+        { name: 'enrichedDescriptions', count: summary.enrichedDescriptions || 0 },
+      ], null, 'warn');
+
+      $('bfSourceTables').innerHTML = Object.entries(stats.bySource || {}).map(([src, row]) => `
+        <div style="margin-bottom:18px">
+          <h2>${escapeHtml(src)} <span class="muted mono">total=${row.total}</span></h2>
+          <table>
+            <thead><tr><th>Метрика</th><th>Значение</th></tr></thead>
+            <tbody>
+              <tr><td>Всего</td><td class="mono">${row.total}</td></tr>
+              <tr><td>Без категории</td><td class="mono">${row.noCategory}</td></tr>
+              <tr><td>Без категории после AI</td><td class="mono">${row.noCategoryAfterAi}</td></tr>
+              <tr><td>Без города</td><td class="mono">${row.noCity}</td></tr>
+            </tbody>
+          </table>
+          <div class="grid2" style="margin-top:10px">
+            <div><h3>Топ категории</h3>${bars(row.categories || [], null)}</div>
+            <div><h3>Resolved by</h3>${bars(row.resolvedBy || [], null, 'alt')}</div>
+          </div>
+        </div>
+      `).join('') || '<div class="empty">Нет данных по источникам</div>';
+
+      $('bfGeoCountries').innerHTML = bars(summary.countries || [], null);
+      $('bfGeoCities').innerHTML = bars(summary.cities || [], null, 'alt');
+
+      const list = summary.categories || [];
+      $('bfCatBars').innerHTML = bars(list, null);
+      $('bfCatTable').innerHTML = list.length ? `
+        <table>
+          <thead><tr><th>Категория</th><th>ID</th><th>Count</th></tr></thead>
+          <tbody>
+            ${list.map((r) => `<tr><td>${escapeHtml(r.name)}</td><td class="mono">${escapeHtml(r.id)}</td><td class="mono">${r.count}</td></tr>`).join('')}
+          </tbody>
+        </table>` : '<div class="empty">Нет данных</div>';
+
+      const runs = stats.backfillRuns || [];
+      $('bfRunsTable').innerHTML = runs.length ? `
+        <table>
+          <thead>
+            <tr><th>Когда</th><th>Total</th><th>Resolved</th><th>Desc+</th><th>OpenAI</th><th>Run id</th></tr>
+          </thead>
+          <tbody>
+            ${runs.map((r) => {
+              const br = r.byResolved || {};
+              const ai = r.openaiUsage || {};
+              const id = String(r._id);
+              const active = state.bfSelectedRunId === id ? ' active' : '';
+              return `<tr class="bf-run-row${active}" data-run-id="${escapeHtml(id)}" style="cursor:pointer">
+                <td class="mono">${escapeHtml(new Date(r.createdAt).toISOString())}</td>
+                <td class="mono">${r.total || 0}</td>
+                <td class="mono">kw${br.keywords || 0} ai${br.ai || 0} other${br.default_other || 0}</td>
+                <td class="mono">${r.enrichedDescriptions || 0}</td>
+                <td class="mono">${ai.total_tokens != null ? `${ai.total_tokens} (out ${ai.completion_tokens || 0})` : '—'}</td>
+                <td class="mono">${escapeHtml(id)}</td>
+              </tr>`;
+            }).join('')}
+          </tbody>
+        </table>` : '<div class="empty">Нет backfill runs за период</div>';
+
+      $('bfRunsTable').querySelectorAll('tr.bf-run-row').forEach((row) => {
+        row.addEventListener('click', () => {
+          state.bfSelectedRunId = row.dataset.runId;
+          renderBackfill(state.backfillStats);
+        });
+      });
+
+      refreshBfEventCards();
     }
 
     function parseStatsJson(raw) {
@@ -766,6 +1103,21 @@
         renderSources(stats);
         renderGeo(stats);
         renderCats(stats);
+        try {
+          const bf = await api(`/parsing/stats/backfill?${qs}`);
+          state.backfillStats = bf;
+          renderBackfill(bf);
+        } catch (e) {
+          state.backfillStats = null;
+          const base = $('baseUrl').value.replace(/\/$/, '');
+          const hint = /not found/i.test(String(e.message || ''))
+            ? `<br/>Эндпоинт backfill недоступен на <code>${escapeHtml(base)}</code>. `
+              + `Локальные тестовые runs смотри на <code>http://localhost:4001</code> `
+              + `(поставь Base URL = localhost и Загрузить).`
+            : '';
+          $('bfCards').innerHTML = `<div class="empty">Backfill stats: ${escapeHtml(e.message || e)}${hint}</div>`;
+          renderBfEventCards([]);
+        }
         await loadRuns();
       } finally {
         $('loadBtn').disabled = false;
@@ -965,6 +1317,9 @@
           toast(e.message || String(e), false);
         });
       }
+      if (tab === 'backfill' && !state.backfillStats) {
+        loadStats().catch((e) => showError(e.message || String(e)));
+      }
     }
 
     document.querySelectorAll('[data-preset]').forEach((btn) => {
@@ -977,6 +1332,10 @@
     $('selectNone').onclick = () => document.querySelectorAll('#sources input').forEach((el) => { el.checked = false; });
     $('loadBtn').onclick = () => loadStats().catch((e) => showError(e.message || String(e)));
     $('reloadRuns').onclick = () => loadRuns().catch((e) => showError(e.message || String(e)));
+    $('bfCardsShowAll').onclick = () => {
+      state.bfSelectedRunId = null;
+      if (state.backfillStats) renderBackfill(state.backfillStats);
+    };
 
     $('cityDiscoverBtn').onclick = () => runCityDiscover().catch((e) => toast(e.message || String(e), false));
     $('cityReloadBtn').onclick = () => loadCitiesTab().catch((e) => toast(e.message || String(e), false));
@@ -1018,8 +1377,12 @@
 
     renderSourceChips();
     loadCreds();
-    applyPreset('prevWeek');
-    if (location.hash === '#cities') switchTab('cities');
+    applyPreset('last7');
+    if (location.hash === '#cities') {
+      switchTab('cities');
+    } else {
+      loadStats().catch((e) => showError(e.message || String(e)));
+    }
   </script>
 </body>
 </html>
