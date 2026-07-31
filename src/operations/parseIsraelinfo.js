@@ -130,6 +130,100 @@ const parseCitiesFromText = (text = '') => {
     .filter(Boolean);
 };
 
+/** Strip feed meta lines that are not real event copy. */
+const cleanFeedDescription = (text = '') => String(text || '')
+  .replace(/\s*Дат[аы]\s*:\s*.*$/i, ' ')
+  .replace(/\s*Город[аы]?\s*:\s*.*$/i, ' ')
+  .replace(/\s*Купить билеты[:\s].*$/i, ' ')
+  .replace(/\s+/g, ' ')
+  .trim();
+
+/**
+ * Venues from announce HTML (schema.org Place preferred, table data-hall fallback).
+ */
+const parseVenuesFromAnnounceHtml = (html = '') => {
+  const venues = [];
+  const seen = new Set();
+
+  const pushVenue = ({ city = '', hall = '', street = '' } = {}) => {
+    const c = String(city || '').trim();
+    const h = String(hall || '').trim();
+    const s = String(street || '').trim();
+    if (!h && !s) return;
+    const key = `${h.toLowerCase()}|${s.toLowerCase()}|${c.toLowerCase()}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    venues.push({ city: c, hall: h, street: s });
+  };
+
+  const placeRe = /itemprop="location"[^>]*itemscope[\s\S]*?<\/div>/gi;
+  let placeMatch;
+  while ((placeMatch = placeRe.exec(html))) {
+    const block = placeMatch[0];
+    pushVenue({
+      hall: (block.match(/itemprop="name"\s+content="([^"]*)"/i) || [])[1] || '',
+      city: (block.match(/itemprop="addressLocality"\s+content="([^"]*)"/i) || [])[1] || '',
+      street: (block.match(/itemprop="streetAddress"\s+content="([^"]*)"/i) || [])[1] || '',
+    });
+  }
+
+  if (!venues.length) {
+    const rowRe = /<tr[^>]*data-city="([^"]*)"[^>]*>([\s\S]*?)<\/tr>/gi;
+    let rowMatch;
+    while ((rowMatch = rowRe.exec(html))) {
+      const hallMatch = (rowMatch[2] || '').match(/data-hall="([^"]+)"/i);
+      pushVenue({
+        city: rowMatch[1] || '',
+        hall: hallMatch ? hallMatch[1] : '',
+      });
+    }
+  }
+
+  return venues;
+};
+
+const formatVenueAddress = (venues = [], fallbackCity = '') => {
+  if (!venues.length) return String(fallbackCity || '').trim();
+
+  if (venues.length === 1) {
+    const v = venues[0];
+    return [v.hall, v.street, !v.hall && !v.street ? v.city : '']
+      .filter(Boolean)
+      .join(', ');
+  }
+
+  // Multi-city tour: unique halls (street makes the string huge / unstable for merge)
+  const halls = [...new Set(venues.map((v) => v.hall).filter(Boolean))];
+  if (halls.length) return halls.join('; ');
+
+  return venues
+    .map((v) => [v.street, v.city].filter(Boolean).join(', '))
+    .filter(Boolean)
+    .join('; ') || String(fallbackCity || '').trim();
+};
+
+const fetchAnnounceVenues = async (link, cache) => {
+  const url = String(link || '').trim();
+  if (!url) return [];
+  if (cache.has(url)) return cache.get(url);
+  try {
+    const res = await request(url, {
+      headers: { Accept: 'text/html,application/xhtml+xml' },
+    });
+    if (res.statusCode !== 200) {
+      cache.set(url, []);
+      return [];
+    }
+    const venues = parseVenuesFromAnnounceHtml(res.text);
+    cache.set(url, venues);
+    return venues;
+  } catch (e) {
+    logger.warn(`Announce venue fetch failed (${url}): ${e.message || e}`);
+    cache.set(url, []);
+    return [];
+  }
+};
+
 const parsePrices = (text = '') => {
   const range = text.match(/от\s+(\d+(?:[.,]\d+)?)\s+до\s+(\d+(?:[.,]\d+)?)/i);
   if (range) {
@@ -290,15 +384,45 @@ async function parseIsraelinfo({ meta = {}, runId, operationId }) {
       || countries.find((c) => /израил|israel/i.test(c.name || ''));
     const defaultCountryId = meta.countryId || israel?._id || null;
 
+    // Announce pages have real venue (hall + street); RSS only lists cities.
+    const venueCache = new Map();
+    const CONCURRENCY = 6;
+    await logProgress(`Fetching venues from announce pages (concurrency=${CONCURRENCY})...`);
+    for (let i = 0; i < items.length; i += CONCURRENCY) {
+      const chunk = items.slice(i, i + CONCURRENCY);
+      // eslint-disable-next-line no-await-in-loop
+      await Promise.all(chunk.map(async (item) => {
+        const venues = await fetchAnnounceVenues(item.link, venueCache);
+        // eslint-disable-next-line no-param-reassign
+        item._venues = venues;
+      }));
+      if ((i + CONCURRENCY) % 60 === 0 || i + CONCURRENCY >= items.length) {
+        const done = items.slice(0, Math.min(i + CONCURRENCY, items.length));
+        const ok = done.filter((it) => (it._venues || []).length).length;
+        // eslint-disable-next-line no-await-in-loop
+        await logProgress(
+          `Venues progress: ${done.length}/${items.length} (ok=${ok}, miss=${done.length - ok})`,
+        );
+      }
+    }
+    const venueOk = items.filter((it) => (it._venues || []).length).length;
+    const venueMiss = items.length - venueOk;
+
     for (const item of items) {
-      const plain = stripTags(item.description);
-      const dates = parseDatesFromText(plain);
-      const cityNames = parseCitiesFromText(plain);
-      const prices = parsePrices(plain);
+      const plainRaw = stripTags(item.description);
+      const plain = cleanFeedDescription(plainRaw) || plainRaw;
+      const dates = parseDatesFromText(plainRaw);
+      const cityNames = parseCitiesFromText(plainRaw);
+      const prices = parsePrices(plainRaw);
       const photo = extractImg(item.description);
+      const venues = item._venues || [];
 
       let matchedCity = null;
-      for (const cityName of cityNames) {
+      const cityCandidates = [
+        ...venues.map((v) => v.city).filter(Boolean),
+        ...cityNames,
+      ];
+      for (const cityName of cityCandidates) {
         matchedCity = findCityInDb(cities, cityName);
         if (matchedCity) break;
       }
@@ -311,7 +435,8 @@ async function parseIsraelinfo({ meta = {}, runId, operationId }) {
 
       const cityId = meta.cityId || matchedCity?._id || null;
       const countryId = matchedCity?.country_id || defaultCountryId || null;
-      const address = cityNames.join(', ') || matchedCity?.name || '';
+      const fallbackCity = matchedCity?.name || cityNames[0] || '';
+      const address = formatVenueAddress(venues, fallbackCity);
       const dateStart = dates.length
         ? new Date(Math.min(...dates.map((d) => d.getTime())))
         : null;
@@ -362,7 +487,9 @@ async function parseIsraelinfo({ meta = {}, runId, operationId }) {
       events.push(newEvent);
     }
 
-    await logProgress(`Mapped ${events.length} events`);
+    await logProgress(
+      `Mapped ${events.length} events (venues ok=${venueOk}, miss=${venueMiss}, fallback city only)`,
+    );
   } catch (e) {
     const errMsg = e?.message || 'Unknown error while parsing Israelinfo';
     errorTexts.push(errMsg);
