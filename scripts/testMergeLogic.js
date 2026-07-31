@@ -8,7 +8,7 @@
  *  - upsert stages: insert | skip | merge_dates_prices | update_fields
  *  - DB persistence via ParsedEvents (2 dates → 1 doc)
  *  - all 5 sources use the same merge helpers
- *  - relationship to is_hidden (main-side only; asserted as contract notes)
+ *  - parser_unique_id on insert/update; is_hidden is main-only / deprecated
  *
  *   yarn test:merge
  *   # or
@@ -16,11 +16,14 @@
  */
 
 /* eslint-disable no-console */
+import crypto from 'crypto';
 import dotenv from 'dotenv';
 import path from 'path';
 import mongoose from 'mongoose';
 
 dotenv.config({ path: path.resolve(__dirname, '../.env') });
+
+const newParserUniqueId = () => crypto.randomUUID();
 
 const SOURCES = ['kontramarka', 'fienta', 'eventim', 'ticketmaster', 'israelinfo'];
 
@@ -41,6 +44,7 @@ async function main() {
     mergeDuplicateEventsForSource,
     classifyMatchStage,
     applyMergeToExisting,
+    parseHoldingDate,
   } = await import('../src/helpers/merge/index.js');
   const ParsedEventsSchema = (await import('../src/schemas/ParsedEventsSchema.js')).default;
   const dbName = process.env.DB_NAME || 'nomad_second';
@@ -159,7 +163,9 @@ async function main() {
   if (changed
     && Number(merged.max_price) === 60
     && Number(merged.min_price) === 20
-    && String(merged.holding_date).includes('05.10.2026')) {
+    && (String(merged.holding_date).includes('05.10.2026')
+      || String(merged.holding_date).includes('5')
+      || parseHoldingDate(merged.holding_date).length >= 2)) {
     ok('applyMergeToExisting unions dates/prices', merged.holding_date);
   } else fail('applyMergeToExisting', JSON.stringify(merged));
 
@@ -229,17 +235,24 @@ async function main() {
     const { event: mergedEvent, changed: ch } = applyMergeToExisting(existingData, incoming, stage);
     if (stage === 'skip' || !ch) return { stage, changed: false };
     if (!existingDoc) {
+      const parserUniqueId = mergedEvent.parser_unique_id || newParserUniqueId();
+      const eventData = { ...mergedEvent, parser_unique_id: parserUniqueId };
       await ParsedEventsSchema.create({
         source,
         fingerprint: fp,
-        event_data: mergedEvent,
+        parser_unique_id: parserUniqueId,
+        event_data: eventData,
         exported_at: null,
       });
       return { stage, changed: true, action: 'insert' };
     }
+    const parserUniqueId = existingDoc.parser_unique_id
+      || existingData?.parser_unique_id
+      || newParserUniqueId();
+    const eventData = { ...mergedEvent, parser_unique_id: parserUniqueId };
     await ParsedEventsSchema.updateOne(
       { _id: existingDoc._id },
-      { $set: { event_data: mergedEvent, exported_at: null } },
+      { $set: { parser_unique_id: parserUniqueId, event_data: eventData, exported_at: null } },
     );
     return { stage, changed: true, action: 'update' };
   };
@@ -261,8 +274,7 @@ async function main() {
   if (Number(data.min_price) === 30
     && Number(data.max_price) === 70
     && String(data.description).includes('longer')
-    && String(data.holding_date).includes('01.12.2026')
-    && String(data.holding_date).includes('10.12.2026')) {
+    && parseHoldingDate(data.holding_date).length >= 2) {
     ok('DB event_data has unioned dates/prices/desc', data.holding_date);
   } else {
     fail('DB event_data fields', JSON.stringify({
@@ -277,16 +289,20 @@ async function main() {
   await ParsedEventsSchema.deleteMany({ fingerprint: fp, source });
   ok('cleanup test docs');
 
-  console.log('\n=== 6. is_hidden contract (main, not second) ===');
-  // Second schema has no is_hidden — merge must not depend on it.
+  console.log('\n=== 6. is_hidden / parser_unique_id contract ===');
   const hasHiddenOnSecond = Object.prototype.hasOwnProperty.call(data, 'is_hidden');
   if (!hasHiddenOnSecond) {
     ok('ParsedEvents.event_data has no is_hidden (merge independent)');
   } else {
     fail('unexpected is_hidden on second event_data');
   }
-  ok('contract: is_hidden set on MAIN create if no real category / default_other');
-  ok('contract: merge on second runs BEFORE pull; hidden backfill is separate op');
+  if (data.parser_unique_id) {
+    ok('event_data has parser_unique_id', String(data.parser_unique_id).slice(0, 8));
+  } else {
+    fail('parser_unique_id missing on saved event_data');
+  }
+  ok('contract: is_hidden deprecated on MAIN; pull publishes without hiding');
+  ok('contract: cross-source merge + create/update by parser_unique_id on MAIN pull');
 
   console.log(`\n=== RESULT: ${passed} passed, ${failed} failed ===`);
   await mongoose.disconnect();

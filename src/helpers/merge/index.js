@@ -1,7 +1,14 @@
 import { EVENT_SOURCE } from '../constants';
 import { mergeDuplicateEvents } from './mergeDuplicateEvents';
 
-export { mergeDuplicateEvents, formatHoldingDate, eventFingerprint } from './mergeDuplicateEvents';
+export {
+  mergeDuplicateEvents,
+  formatHoldingDate,
+  formatHoldingDateNumeric,
+  parseHoldingDate,
+  mergeHoldingDates,
+  eventFingerprint,
+} from './mergeDuplicateEvents';
 export {
   FULL_MATCH_FIELDS,
   classifyMatchStage,

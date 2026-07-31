@@ -1,0 +1,572 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Nomad — спаршенные мероприятия</title>
+  <style>
+    :root {
+      --bg: #0f1419;
+      --panel: #1a222d;
+      --panel2: #232d3b;
+      --border: #2e3a4a;
+      --text: #e8eef5;
+      --muted: #8b9bb0;
+      --accent: #3d9cf0;
+      --accent2: #2bb673;
+      --warn: #e6a23c;
+      --danger: #e25c5c;
+      --chip: #2a3648;
+      --radius: 10px;
+      --font: "IBM Plex Sans", "Segoe UI", system-ui, sans-serif;
+      --mono: "IBM Plex Mono", ui-monospace, monospace;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: var(--font);
+      background:
+        radial-gradient(1200px 500px at 10% -10%, #1a3a55 0%, transparent 55%),
+        radial-gradient(900px 400px at 90% 0%, #163528 0%, transparent 50%),
+        var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+    }
+    header {
+      padding: 28px 28px 12px;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 12px 24px;
+      align-items: end;
+      justify-content: space-between;
+    }
+    h1 {
+      margin: 0;
+      font-size: 1.55rem;
+      letter-spacing: -0.02em;
+      font-weight: 650;
+    }
+    .sub { color: var(--muted); font-size: 0.92rem; margin-top: 4px; }
+    .nav-links { display: flex; gap: 10px; flex-wrap: wrap; }
+    .nav-links a {
+      color: var(--accent);
+      text-decoration: none;
+      font-size: 0.9rem;
+      padding: 8px 12px;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      background: var(--panel);
+    }
+    .nav-links a:hover { border-color: var(--accent); }
+    main { padding: 0 28px 40px; }
+    .panel {
+      background: color-mix(in srgb, var(--panel) 92%, transparent);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 16px;
+      margin-bottom: 16px;
+      backdrop-filter: blur(6px);
+    }
+    .filters {
+      display: grid;
+      grid-template-columns: repeat(12, 1fr);
+      gap: 12px;
+      align-items: end;
+    }
+    .field { grid-column: span 3; display: flex; flex-direction: column; gap: 6px; }
+    .field.wide { grid-column: span 6; }
+    .field.full { grid-column: span 12; }
+    label { font-size: 0.78rem; color: var(--muted); text-transform: uppercase; letter-spacing: 0.04em; }
+    input, select, button {
+      font: inherit;
+      border-radius: 8px;
+      border: 1px solid var(--border);
+      background: var(--panel2);
+      color: var(--text);
+      padding: 9px 11px;
+    }
+    input:focus, select:focus { outline: 1px solid var(--accent); }
+    .sources { display: flex; flex-wrap: wrap; gap: 8px; }
+    .sources button.chip {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 7px 12px;
+      background: var(--chip);
+      border: 1px solid var(--border);
+      border-radius: 999px;
+      cursor: pointer;
+      font-size: 0.9rem;
+      color: var(--text);
+      font-weight: 500;
+    }
+    .sources button.chip.active {
+      background: color-mix(in srgb, var(--accent) 28%, var(--chip));
+      border-color: var(--accent);
+      color: #fff;
+    }
+    .sources button.chip .cnt {
+      font-family: var(--mono);
+      font-size: 0.75rem;
+      color: var(--muted);
+      background: var(--panel2);
+      padding: 1px 6px;
+      border-radius: 999px;
+    }
+    .sources button.chip.active .cnt { color: var(--text); }
+    .actions { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+    button.primary {
+      cursor: pointer;
+      background: var(--accent);
+      border-color: transparent;
+      color: #041018;
+      font-weight: 650;
+    }
+    button.secondary {
+      cursor: pointer;
+      background: var(--panel2);
+      color: var(--text);
+      border-color: var(--border);
+      font-weight: 500;
+    }
+    button:disabled { opacity: 0.55; cursor: wait; }
+    .meta-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 12px 20px;
+      color: var(--muted);
+      font-size: 0.9rem;
+      margin-bottom: 12px;
+    }
+    .meta-row strong { color: var(--text); font-weight: 600; }
+    .err {
+      color: var(--danger);
+      font-size: 0.9rem;
+      margin-top: 8px;
+    }
+    .err.hidden { display: none; }
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+      gap: 12px;
+    }
+    .card {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      overflow: hidden;
+      cursor: pointer;
+      transition: border-color 0.15s ease;
+      display: flex;
+      flex-direction: column;
+    }
+    .card:hover { border-color: color-mix(in srgb, var(--accent) 55%, var(--border)); }
+    .card.open { border-color: var(--accent); }
+    .card-top {
+      display: grid;
+      grid-template-columns: 88px 1fr;
+      gap: 12px;
+      padding: 12px;
+    }
+    .thumb {
+      width: 88px;
+      height: 88px;
+      border-radius: 8px;
+      object-fit: cover;
+      background: var(--panel2);
+      border: 1px solid var(--border);
+    }
+    .thumb.placeholder {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: var(--muted);
+      font-size: 0.7rem;
+      text-align: center;
+      padding: 6px;
+    }
+    .card-body { min-width: 0; }
+    .card-title {
+      margin: 0 0 6px;
+      font-size: 1rem;
+      font-weight: 650;
+      line-height: 1.3;
+      display: -webkit-box;
+      -webkit-line-clamp: 2;
+      -webkit-box-orient: vertical;
+      overflow: hidden;
+    }
+    .badges { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 8px; }
+    .badge {
+      font-size: 0.72rem;
+      padding: 3px 8px;
+      border-radius: 999px;
+      background: var(--chip);
+      border: 1px solid var(--border);
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: 0.03em;
+    }
+    .badge.src-eventim { color: #7ec8ff; }
+    .badge.src-ticketmaster { color: #9fd89f; }
+    .badge.src-israelinfo { color: #f0c27a; }
+    .badge.src-kontramarka { color: #d4a0ff; }
+    .badge.src-fienta { color: #ff9eb5; }
+    .badge.ok { color: var(--accent2); border-color: color-mix(in srgb, var(--accent2) 40%, var(--border)); }
+    .badge.warn { color: var(--warn); }
+    .lines { font-size: 0.84rem; color: var(--muted); display: flex; flex-direction: column; gap: 3px; }
+    .lines span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .lines b { color: var(--text); font-weight: 500; }
+    .desc-preview {
+      margin: 0 12px 12px;
+      font-size: 0.84rem;
+      color: var(--muted);
+      display: -webkit-box;
+      -webkit-line-clamp: 2;
+      -webkit-box-orient: vertical;
+      overflow: hidden;
+      line-height: 1.4;
+    }
+    .detail {
+      display: none;
+      border-top: 1px solid var(--border);
+      padding: 12px;
+      background: color-mix(in srgb, var(--panel2) 55%, transparent);
+      font-size: 0.86rem;
+    }
+    .card.open .detail { display: block; }
+    .detail p { margin: 0 0 10px; white-space: pre-wrap; word-break: break-word; color: var(--text); line-height: 1.45; }
+    .detail dl {
+      display: grid;
+      grid-template-columns: 110px 1fr;
+      gap: 4px 10px;
+      margin: 0;
+    }
+    .detail dt { color: var(--muted); }
+    .detail dd { margin: 0; word-break: break-all; font-family: var(--mono); font-size: 0.78rem; }
+    .pager {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      align-items: center;
+      justify-content: space-between;
+      margin-top: 16px;
+    }
+    .pager .pages { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
+    .empty {
+      text-align: center;
+      padding: 48px 16px;
+      color: var(--muted);
+      border: 1px dashed var(--border);
+      border-radius: var(--radius);
+    }
+    @media (max-width: 980px) {
+      .field, .field.wide { grid-column: span 6; }
+      header, main { padding-left: 16px; padding-right: 16px; }
+      .card-top { grid-template-columns: 72px 1fr; }
+      .thumb { width: 72px; height: 72px; }
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <div>
+      <h1>Спаршенные мероприятия</h1>
+      <div class="sub">ParsedEvents · фильтр по источнику · просмотр без onlyPending</div>
+    </div>
+    <div class="nav-links">
+      <a href="/parsing/stats-ui">Статистика</a>
+      <a href="/parsing/events-ui">Мероприятия</a>
+    </div>
+  </header>
+
+  <main>
+    <section class="panel">
+      <div class="filters">
+        <div class="field wide">
+          <label>Base URL second-сервера</label>
+          <input id="baseUrl" placeholder="http://localhost:4001" />
+        </div>
+        <div class="field wide">
+          <label>API Key (X-Api-Key)</label>
+          <input id="apiKey" type="password" placeholder="PARSING_SERVER_API_KEY" />
+        </div>
+        <div class="field wide">
+          <label>Поиск по названию</label>
+          <input id="q" placeholder="например: concert" />
+        </div>
+        <div class="field">
+          <label>На странице</label>
+          <select id="perPage">
+            <option value="12">12</option>
+            <option value="24" selected>24</option>
+            <option value="48">48</option>
+            <option value="100">100</option>
+          </select>
+        </div>
+        <div class="field full">
+          <label>Источник</label>
+          <div class="sources" id="sources"></div>
+        </div>
+        <div class="field full">
+          <div class="actions">
+            <button id="loadBtn" class="primary" type="button">Загрузить</button>
+            <button id="prevBtn" class="secondary" type="button">← Назад</button>
+            <button id="nextBtn" class="secondary" type="button">Вперёд →</button>
+          </div>
+          <div id="error" class="err hidden"></div>
+        </div>
+      </div>
+    </section>
+
+    <div class="meta-row" id="metaRow">
+      <span>Всего: <strong id="totalLabel">—</strong></span>
+      <span>Страница: <strong id="pageLabel">—</strong></span>
+      <span>Источник: <strong id="sourceLabel">все</strong></span>
+    </div>
+
+    <div id="grid" class="grid"></div>
+    <div id="empty" class="empty" style="display:none">Нет мероприятий по текущему фильтру</div>
+
+    <div class="pager">
+      <div class="pages" id="pageButtons"></div>
+    </div>
+  </main>
+
+  <script>
+    const SOURCES = ['eventim', 'ticketmaster', 'israelinfo', 'kontramarka', 'fienta'];
+    const $ = (id) => document.getElementById(id);
+
+    const state = {
+      source: '',
+      page: 1,
+      totalPages: 1,
+      totalEvents: 0,
+      countsBySource: {},
+    };
+
+    function saveCreds() {
+      localStorage.setItem('nomad_stats_base', $('baseUrl').value.trim());
+      localStorage.setItem('nomad_stats_key', $('apiKey').value.trim());
+    }
+
+    function loadCreds() {
+      const saved = (localStorage.getItem('nomad_stats_base') || '').replace(/\/$/, '');
+      $('baseUrl').value = saved || window.location.origin;
+      $('apiKey').value = localStorage.getItem('nomad_stats_key') || '';
+    }
+
+    function headers() {
+      const key = $('apiKey').value.trim();
+      return {
+        Accept: 'application/json',
+        'X-Api-Key': key,
+      };
+    }
+
+    function base() {
+      return ($('baseUrl').value.trim() || window.location.origin).replace(/\/$/, '');
+    }
+
+    function showError(msg) {
+      const el = $('error');
+      if (!msg) {
+        el.classList.add('hidden');
+        el.textContent = '';
+        return;
+      }
+      el.classList.remove('hidden');
+      el.textContent = msg;
+    }
+
+    function escapeHtml(s) {
+      return String(s ?? '')
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;');
+    }
+
+    function priceLabel(ev) {
+      const min = ev.min_price;
+      const max = ev.max_price;
+      if (min == null && max == null) return '—';
+      if (min != null && max != null && Number(min) !== Number(max)) return `${min} – ${max}`;
+      return String(min ?? max);
+    }
+
+    function imageUrl(ev) {
+      return ev.image_url || ev.image || ev.photo_url || (Array.isArray(ev.photos) && ev.photos[0]?.full_url) || '';
+    }
+
+    function renderSources() {
+      const wrap = $('sources');
+      const allCnt = Object.values(state.countsBySource).reduce((a, b) => a + b, 0);
+      const items = [
+        { id: '', label: 'Все', count: allCnt || null },
+        ...SOURCES.map((id) => ({ id, label: id, count: state.countsBySource[id] ?? null })),
+      ];
+      wrap.innerHTML = items.map((item) => {
+        const active = state.source === item.id ? 'active' : '';
+        const cnt = item.count != null ? `<span class="cnt">${item.count}</span>` : '';
+        return `<button type="button" class="chip ${active}" data-source="${escapeHtml(item.id)}">${escapeHtml(item.label)} ${cnt}</button>`;
+      }).join('');
+      wrap.querySelectorAll('button.chip').forEach((btn) => {
+        btn.addEventListener('click', () => {
+          state.source = btn.dataset.source || '';
+          state.page = 1;
+          renderSources();
+          load();
+        });
+      });
+    }
+
+    function renderCards(events) {
+      const grid = $('grid');
+      const empty = $('empty');
+      if (!events.length) {
+        grid.innerHTML = '';
+        empty.style.display = 'block';
+        return;
+      }
+      empty.style.display = 'none';
+      grid.innerHTML = events.map((ev, idx) => {
+        const src = ev.source || '—';
+        const img = imageUrl(ev);
+        const exported = !!ev.exported_at;
+        const desc = (ev.description || '').trim();
+        const thumb = img
+          ? `<img class="thumb" src="${escapeHtml(img)}" alt="" loading="lazy" onerror="this.replaceWith(Object.assign(document.createElement('div'),{className:'thumb placeholder',textContent:'no img'}))" />`
+          : `<div class="thumb placeholder">no img</div>`;
+        return `
+          <article class="card" data-idx="${idx}">
+            <div class="card-top">
+              ${thumb}
+              <div class="card-body">
+                <h2 class="card-title">${escapeHtml(ev.name || 'без названия')}</h2>
+                <div class="badges">
+                  <span class="badge src-${escapeHtml(src)}">${escapeHtml(src)}</span>
+                  <span class="badge ${exported ? 'ok' : 'warn'}">${exported ? 'exported' : 'pending'}</span>
+                  ${ev.specialization ? `<span class="badge">${escapeHtml(ev.specialization)}</span>` : ''}
+                </div>
+                <div class="lines">
+                  <span><b>${escapeHtml(ev.holding_date || '—')}</b></span>
+                  <span>${escapeHtml(ev.address || '—')}</span>
+                  <span>цена: <b>${escapeHtml(priceLabel(ev))}</b></span>
+                </div>
+              </div>
+            </div>
+            ${desc ? `<p class="desc-preview">${escapeHtml(desc)}</p>` : ''}
+            <div class="detail">
+              <p>${escapeHtml(desc || 'Описание отсутствует')}</p>
+              <dl>
+                <dt>date_start</dt><dd>${escapeHtml(ev.date_start || '—')}</dd>
+                <dt>date_end</dt><dd>${escapeHtml(ev.date_end || '—')}</dd>
+                <dt>parser_uid</dt><dd>${escapeHtml(ev.parser_unique_id || '—')}</dd>
+                <dt>fingerprint</dt><dd>${escapeHtml(ev.fingerprint || '—')}</dd>
+                <dt>parsed_id</dt><dd>${escapeHtml(ev._parsed_event_id || '—')}</dd>
+                <dt>category</dt><dd>${escapeHtml(ev.category_id || ev.category || '—')}</dd>
+                <dt>resolved_by</dt><dd>${escapeHtml(ev.category_resolved_by || '—')}</dd>
+                <dt>updatedAt</dt><dd>${escapeHtml(ev.updatedAt || '—')}</dd>
+              </dl>
+            </div>
+          </article>
+        `;
+      }).join('');
+
+      grid.querySelectorAll('.card').forEach((card) => {
+        card.addEventListener('click', () => {
+          card.classList.toggle('open');
+        });
+      });
+    }
+
+    function renderPager() {
+      $('totalLabel').textContent = String(state.totalEvents);
+      $('pageLabel').textContent = `${state.page} / ${state.totalPages}`;
+      $('sourceLabel').textContent = state.source || 'все';
+      $('prevBtn').disabled = state.page <= 1;
+      $('nextBtn').disabled = state.page >= state.totalPages;
+
+      const wrap = $('pageButtons');
+      const pages = [];
+      const maxButtons = 7;
+      let start = Math.max(1, state.page - 3);
+      let end = Math.min(state.totalPages, start + maxButtons - 1);
+      start = Math.max(1, end - maxButtons + 1);
+      for (let p = start; p <= end; p += 1) pages.push(p);
+      wrap.innerHTML = pages.map((p) => (
+        `<button type="button" class="${p === state.page ? 'primary' : 'secondary'}" data-page="${p}">${p}</button>`
+      )).join('');
+      wrap.querySelectorAll('button').forEach((btn) => {
+        btn.addEventListener('click', () => {
+          state.page = Number(btn.dataset.page);
+          load();
+        });
+      });
+    }
+
+    async function load() {
+      showError('');
+      saveCreds();
+      const btn = $('loadBtn');
+      btn.disabled = true;
+      try {
+        const params = new URLSearchParams({
+          page: String(state.page),
+          per_page: $('perPage').value,
+        });
+        if (state.source) params.set('source', state.source);
+        const q = $('q').value.trim();
+        if (q) params.set('q', q);
+
+        const res = await fetch(`${base()}/parsing/events/browse?${params}`, { headers: headers() });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok || data.status === 'error') {
+          throw new Error(data.message || `HTTP ${res.status}`);
+        }
+
+        state.totalEvents = data.totalEvents || 0;
+        state.totalPages = data.totalPages || 1;
+        state.page = data.page || state.page;
+        if (data.countsBySource) state.countsBySource = data.countsBySource;
+
+        renderSources();
+        renderCards(data.events || []);
+        renderPager();
+      } catch (e) {
+        showError(e.message || String(e));
+      } finally {
+        btn.disabled = false;
+      }
+    }
+
+    $('loadBtn').addEventListener('click', () => {
+      state.page = 1;
+      load();
+    });
+    $('prevBtn').addEventListener('click', () => {
+      if (state.page > 1) {
+        state.page -= 1;
+        load();
+      }
+    });
+    $('nextBtn').addEventListener('click', () => {
+      if (state.page < state.totalPages) {
+        state.page += 1;
+        load();
+      }
+    });
+    $('q').addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') {
+        state.page = 1;
+        load();
+      }
+    });
+
+    loadCreds();
+    renderSources();
+    load();
+  </script>
+</body>
+</html>

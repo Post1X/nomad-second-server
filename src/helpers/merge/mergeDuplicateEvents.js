@@ -1,29 +1,16 @@
 import crypto from 'crypto';
-import moment from 'moment';
+import {
+  formatHoldingDate,
+  formatHoldingDateNumeric,
+  parseHoldingDate,
+  mergeHoldingDates,
+} from '../holdingDate';
 
-export const formatHoldingDate = (dates = []) => {
-  const valid = (dates || [])
-    .map((d) => (d instanceof Date ? d : new Date(d)))
-    .filter((d) => !Number.isNaN(d.getTime()))
-    .sort((a, b) => a.getTime() - b.getTime());
-
-  if (!valid.length) return '';
-
-  const uniqueDays = [];
-  const seen = new Set();
-  for (const d of valid) {
-    const key = moment(d).format('YYYY-MM-DD');
-    if (!seen.has(key)) {
-      seen.add(key);
-      uniqueDays.push(d);
-    }
-  }
-
-  if (uniqueDays.length === 1) {
-    return moment(uniqueDays[0]).format('DD.MM.YYYY');
-  }
-
-  return uniqueDays.map((d) => moment(d).format('DD.MM.YYYY')).join(', ');
+export {
+  formatHoldingDate,
+  formatHoldingDateNumeric,
+  parseHoldingDate,
+  mergeHoldingDates,
 };
 
 export const normalize = (s) => String(s || '')

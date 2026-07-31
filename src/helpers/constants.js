@@ -23,6 +23,8 @@ export const EVENT_SOURCE = {
 };
 
 export const EXPIRED_EVENTS_CLEANUP_MONTHS = 6;
+/** Daily cleanup: delete ParsedEvents whose date_end is older than this many days. */
+export const EXPIRED_EVENTS_CLEANUP_DAYS = 2;
 
 export const AI_CATEGORY_BATCH_CHARS = 12000;
 

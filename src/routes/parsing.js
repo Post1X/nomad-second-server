@@ -5,11 +5,13 @@ import authApiKey from '../middlewares/authApiKey';
 const router = express.Router();
 
 router.get('/stats-ui', ParsingController.statsPage);
+router.get('/events-ui', ParsingController.eventsPage);
 router.get('/cities-ui', ParsingController.citiesPage);
 
 router.use(authApiKey);
 
 router.post('/create', ParsingController.create);
+router.get('/events/browse', ParsingController.browseEvents);
 router.get('/events', ParsingController.getEvents);
 router.post('/events/ack', ParsingController.ackEvents);
 router.get('/runs', ParsingController.getRuns);

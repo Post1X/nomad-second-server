@@ -1,3 +1,4 @@
+import crypto from 'crypto';
 import ParseRunsSchema from '../schemas/ParseRunsSchema';
 import ParsedEventsSchema from '../schemas/ParsedEventsSchema';
 import { processParsedEvents } from '../services/ProcessParsedEventsServices';
@@ -10,6 +11,8 @@ import { OPERATION_STATUSES } from './constants';
 import { createLoggerWithSource } from './logger';
 
 const logger = createLoggerWithSource('SAVE_EVENTS');
+
+const newParserUniqueId = () => crypto.randomUUID();
 
 export async function saveProcessedEvents({
   runId,
@@ -42,22 +45,30 @@ export async function saveProcessedEvents({
       }
 
       if (!existingDoc) {
+        const parserUniqueId = mergedEvent.parser_unique_id || newParserUniqueId();
+        const eventData = { ...mergedEvent, parser_unique_id: parserUniqueId };
         // eslint-disable-next-line no-await-in-loop
         await ParsedEventsSchema.create({
           source,
           fingerprint,
-          event_data: mergedEvent,
+          parser_unique_id: parserUniqueId,
+          event_data: eventData,
           parse_run: parseRunId,
           exported_at: null,
         });
         inserted += 1;
       } else {
+        const parserUniqueId = existingDoc.parser_unique_id
+          || existingData?.parser_unique_id
+          || newParserUniqueId();
+        const eventData = { ...mergedEvent, parser_unique_id: parserUniqueId };
         // eslint-disable-next-line no-await-in-loop
         await ParsedEventsSchema.updateOne(
           { _id: existingDoc._id },
           {
             $set: {
-              event_data: mergedEvent,
+              parser_unique_id: parserUniqueId,
+              event_data: eventData,
               parse_run: parseRunId,
               exported_at: null,
             },

@@ -101,13 +101,14 @@ const setupCron = () => {
     }
   }, { timezone: 'UTC' });
 
-  cron.schedule('0 5 1 */6 *', async () => {
-    logger.info('Starting expired events cleanup (>6 months)...');
+  // Daily: delete ParsedEvents whose date_end is more than 2 days in the past
+  cron.schedule('15 3 * * *', async () => {
+    logger.info('Starting daily expired events cleanup (>2 days after date_end)...');
     try {
-      const result = await CleanupServices.cleanupExpiredEvents();
-      logger.info(`Cleanup done: ${JSON.stringify(result)}`);
+      const result = await CleanupServices.cleanupExpiredEventsByDays();
+      logger.info(`Daily cleanup done: ${JSON.stringify(result)}`);
     } catch (error) {
-      logger.error(`Cleanup failed: ${error.message || error}`);
+      logger.error(`Daily cleanup failed: ${error.message || error}`);
     }
   }, { timezone: 'UTC' });
 
@@ -118,7 +119,7 @@ const setupCron = () => {
   logger.info('- Friday 02:00 UTC: Fienta');
   logger.info('- Sunday 02:00 UTC: Ticketmaster (every 3 weeks)');
   logger.info('- Sunday 04:00 UTC: Israelinfo');
-  logger.info('- 1st of every 6th month 05:00 UTC: Cleanup expired events (>6 months)');
+  logger.info('- Daily 03:15 UTC: Cleanup expired ParsedEvents (>2 days after date_end)');
   logger.info(`Sources: ${Object.values(EVENT_SOURCE).filter((s) => s !== EVENT_SOURCE.nomad).join(', ')}`);
 };
 

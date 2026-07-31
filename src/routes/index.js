@@ -13,6 +13,7 @@ router.get('/', (req, res) => {
 
 router.get('/ping', (req, res) => res.json('pong'));
 router.get('/stats', (req, res) => res.redirect('/parsing/stats-ui'));
+router.get('/events', (req, res) => res.redirect('/parsing/events-ui'));
 router.get('/cities', (req, res) => res.redirect('/parsing/cities-ui'));
 
 router.use('/parsing', parsingRouter);

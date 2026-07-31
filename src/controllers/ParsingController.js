@@ -119,6 +119,7 @@ class ParsingController {
         source: pe.source,
         updatedAt: pe.updatedAt,
         fingerprint: pe.fingerprint,
+        parser_unique_id: pe.parser_unique_id || pe.event_data?.parser_unique_id || null,
       }));
 
       res.json({
@@ -130,6 +131,84 @@ class ParsingController {
         page,
         per_page,
         ids: docs.map((d) => d._id.toString()),
+      });
+    } catch (error) {
+      next(error);
+    }
+  };
+
+  /**
+   * Browse all ParsedEvents for admin UI (not pull pipeline).
+   * source optional; no onlyPending filter.
+   */
+  static browseEvents = async (req, res, next) => {
+    try {
+      const {
+        source: sourceParam,
+        type,
+        page: pageParam,
+        per_page: perPageParam,
+        q,
+      } = req.query;
+
+      const page = Math.max(1, parseInt(String(pageParam || 1), 10) || 1);
+      const per_page = Math.max(1, Math.min(100, parseInt(String(perPageParam || 24), 10) || 24));
+
+      const filter = {};
+      if (sourceParam || type) {
+        const source = resolveSource(sourceParam || type);
+        if (!source) {
+          return res.status(400).json({
+            status: 'error',
+            message: 'Invalid source. Use eventim|ticketmaster|israelinfo|kontramarka|fienta or omit for all',
+          });
+        }
+        filter.source = source;
+      }
+
+      const query = String(q || '').trim();
+      if (query) {
+        filter['event_data.name'] = { $regex: query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), $options: 'i' };
+      }
+
+      const [totalEvents, docs, countsAgg] = await Promise.all([
+        ParsedEventsSchema.countDocuments(filter),
+        ParsedEventsSchema.find(filter)
+          .sort({ 'event_data.date_start': -1, updatedAt: -1 })
+          .skip((page - 1) * per_page)
+          .limit(per_page)
+          .lean(),
+        ParsedEventsSchema.aggregate([
+          { $group: { _id: '$source', count: { $sum: 1 } } },
+        ]),
+      ]);
+
+      const totalPages = Math.max(1, Math.ceil(totalEvents / per_page) || 1);
+      const countsBySource = {};
+      for (const row of countsAgg) {
+        if (row._id) countsBySource[row._id] = row.count;
+      }
+
+      const events = docs.map((pe) => ({
+        ...(pe.event_data || {}),
+        _parsed_event_id: pe._id.toString(),
+        source: pe.source,
+        updatedAt: pe.updatedAt,
+        createdAt: pe.createdAt,
+        fingerprint: pe.fingerprint,
+        exported_at: pe.exported_at || null,
+        parser_unique_id: pe.parser_unique_id || pe.event_data?.parser_unique_id || null,
+      }));
+
+      res.json({
+        status: 'ok',
+        source: filter.source || null,
+        events,
+        totalEvents,
+        totalPages,
+        page,
+        per_page,
+        countsBySource,
       });
     } catch (error) {
       next(error);
@@ -585,6 +664,11 @@ class ParsingController {
 
   static statsPage = async (req, res) => {
     const filePath = path.join(__dirname, '../../public/parsing-stats.html');
+    res.sendFile(filePath);
+  };
+
+  static eventsPage = async (req, res) => {
+    const filePath = path.join(__dirname, '../../public/parsed-events.html');
     res.sendFile(filePath);
   };
 

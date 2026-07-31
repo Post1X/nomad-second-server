@@ -13,6 +13,11 @@ const ParsedEventsSchema = new mongoose.Schema({
     required: true,
     index: true,
   },
+  /** Stable id for main pull create/update (also copied into event_data). */
+  parser_unique_id: {
+    type: String,
+    required: false,
+  },
   event_data: {
     type: Schema.Types.Mixed,
     required: true,
@@ -33,6 +38,10 @@ const ParsedEventsSchema = new mongoose.Schema({
 });
 
 ParsedEventsSchema.index({ source: 1, fingerprint: 1 }, { unique: true });
+ParsedEventsSchema.index(
+  { parser_unique_id: 1 },
+  { unique: true, partialFilterExpression: { parser_unique_id: { $type: 'string' } } },
+);
 ParsedEventsSchema.index({ source: 1, updatedAt: 1 });
 ParsedEventsSchema.index({ source: 1, exported_at: 1, updatedAt: 1 });
 
