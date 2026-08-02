@@ -492,9 +492,11 @@
         const src = ev.source || '—';
         const img = imageUrl(ev);
         const site = websiteUrl(ev);
-        const exported = !!ev.exported_at;
         const desc = (ev.description || '').trim();
-        const cat = ev.events_category_id || ev.category_id || ev.category || '';
+        const catName = ev.category_name || '';
+        const catId = ev.events_category_id || ev.category_id || '';
+        const cityLabel = ev.city_name || (ev.city_id ? String(ev.city_id) : '');
+        const countryLabel = ev.country_name || (ev.country_id ? String(ev.country_id) : '');
         const thumb = img
           ? `<img class="thumb" src="${escapeHtml(img)}" alt="" loading="lazy" onerror="this.replaceWith(Object.assign(document.createElement('div'),{className:'thumb placeholder',textContent:'no img'}))" />`
           : `<div class="thumb placeholder">no img</div>`;
@@ -506,17 +508,16 @@
                 <h2 class="card-title">${escapeHtml(ev.name || 'без названия')}</h2>
                 <div class="badges">
                   <span class="badge src-${escapeHtml(src)}">${escapeHtml(src)}</span>
-                  <span class="badge ${exported ? 'ok' : 'warn'}">${exported ? 'exported' : 'pending'}</span>
-                  ${ev.specialization ? `<span class="badge">${escapeHtml(ev.specialization)}</span>` : ''}
-                  ${cat ? `<span class="badge">${escapeHtml(String(cat))}</span>` : ''}
+                  ${catName ? `<span class="badge ok">${escapeHtml(catName)}</span>` : (catId ? `<span class="badge warn">${escapeHtml(String(catId))}</span>` : '')}
                   ${ev.category_resolved_by ? `<span class="badge">${escapeHtml(ev.category_resolved_by)}</span>` : ''}
+                  ${ev.specialization && ev.specialization !== 'Event' ? `<span class="badge">${escapeHtml(ev.specialization)}</span>` : ''}
                 </div>
                 <div class="lines">
                   <span><b>${escapeHtml(ev.holding_date || '—')}</b></span>
                   <span>${escapeHtml(ev.address || '—')}</span>
                   <span>цена: <b>${escapeHtml(priceLabel(ev))}</b></span>
-                  ${ev.city_id ? `<span>city_id: <b>${escapeHtml(String(ev.city_id))}</b></span>` : ''}
-                  ${ev.country_id ? `<span>country_id: <b>${escapeHtml(String(ev.country_id))}</b></span>` : ''}
+                  ${cityLabel ? `<span>город: <b>${escapeHtml(cityLabel)}</b></span>` : ''}
+                  ${countryLabel ? `<span>страна: <b>${escapeHtml(countryLabel)}</b></span>` : ''}
                   ${(ev.lat != null && ev.lon != null) ? `<span>coords: <b>${escapeHtml(`${ev.lat}, ${ev.lon}`)}</b></span>` : ''}
                   ${site ? `<span><a href="${escapeHtml(site)}" target="_blank" rel="noopener noreferrer" onclick="event.stopPropagation()">website</a></span>` : ''}
                 </div>

@@ -281,16 +281,35 @@ class ParsingController {
         if (row._id) countsBySource[row._id] = row.count;
       }
 
-      const events = docs.map((pe) => ({
-        ...(pe.event_data || {}),
-        _parsed_event_id: pe._id.toString(),
-        source: pe.source,
-        updatedAt: pe.updatedAt,
-        createdAt: pe.createdAt,
-        city_id: pe.city_id || pe.event_data?.city_id || null,
-        name_key: pe.name_key || null,
-        parser_unique_id: pe.parser_unique_id || pe.event_data?.parser_unique_id || null,
-      }));
+      const [categories, cities, countries] = await Promise.all([
+        EventsCategoriesSchema.find({}).select('_id name').lean(),
+        CitiesSchema.find({}).select('_id name').lean(),
+        CountriesSchema.find({}).select('_id name').lean(),
+      ]);
+      const catMap = Object.fromEntries(categories.map((c) => [String(c._id), c.name]));
+      const cityMap = Object.fromEntries(cities.map((c) => [String(c._id), c.name]));
+      const countryMap = Object.fromEntries(countries.map((c) => [String(c._id), c.name]));
+
+      const events = docs.map((pe) => {
+        const data = pe.event_data || {};
+        const catId = data.events_category_id ? String(data.events_category_id) : '';
+        const cityId = pe.city_id || data.city_id || null;
+        const countryId = data.country_id || null;
+        return {
+          ...data,
+          _parsed_event_id: pe._id.toString(),
+          source: pe.source,
+          updatedAt: pe.updatedAt,
+          createdAt: pe.createdAt,
+          city_id: cityId,
+          name_key: pe.name_key || null,
+          parser_unique_id: pe.parser_unique_id || data.parser_unique_id || null,
+          events_category_id: catId || null,
+          category_name: catId ? (catMap[catId] || null) : null,
+          city_name: cityId ? (cityMap[String(cityId)] || null) : null,
+          country_name: countryId ? (countryMap[String(countryId)] || null) : null,
+        };
+      });
 
       res.json({
         status: 'ok',
