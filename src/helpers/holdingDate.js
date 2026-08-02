@@ -16,10 +16,7 @@ const formatDayRanges = (dayNumbers) => {
   const flush = () => {
     const count = end - start + 1;
     if (count === 1) result.push(String(start));
-    else if (count === 2) {
-      result.push(String(start));
-      result.push(String(end));
-    } else result.push(`${start}–${end}`);
+    else result.push(`${start}–${end}`); // consecutive days → dash (incl. 2-day ranges)
   };
   for (let i = 1; i < numbers.length; i += 1) {
     if (numbers[i] === end + 1) {
@@ -75,7 +72,7 @@ export const formatHoldingDate = (dates = []) => {
     arr.sort((a, b) => a.getTime() - b.getTime());
     const m = moment(arr[0]);
     const withYear = multiYear ? ' YYYY' : '';
-    const consecutive = arr.length >= 3
+    const consecutive = arr.length >= 2
       && arr.every((d, i) => i === 0 || d.getDate() === arr[i - 1].getDate() + 1);
     if (consecutive) {
       parts.push(
@@ -110,10 +107,7 @@ export const formatHoldingDateNumeric = (dates = []) => {
     const endStr = moment(rangeEnd).format('DD.MM.YYYY');
     const daySpan = Math.round((rangeEnd - rangeStart) / (24 * 60 * 60 * 1000)) + 1;
     if (daySpan === 1) parts.push(startStr);
-    else if (daySpan === 2) {
-      parts.push(startStr);
-      parts.push(endStr);
-    } else parts.push(`${startStr}–${endStr}`);
+    else parts.push(`${startStr}–${endStr}`);
   };
 
   for (let i = 1; i < uniqueDays.length; i += 1) {

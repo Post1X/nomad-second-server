@@ -180,7 +180,6 @@ class BackfillStatsServices {
       description: row.description || '',
       address: row.address || '',
       website: row.website || '',
-      ticketmaster_id: row.ticketmaster_id || '',
       holding_date: row.holding_date || '',
       date_start: row.date_start || null,
       date_end: row.date_end || null,

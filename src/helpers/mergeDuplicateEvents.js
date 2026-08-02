@@ -1,8 +1,12 @@
 export {
   mergeDuplicateEvents,
   formatHoldingDate,
+  parseHoldingDate,
+  mergeHoldingDates,
   mergeDuplicateEventsForSource,
-  eventFingerprint,
+  nameKey,
+  cityKey,
+  normalize,
 } from './merge';
 
 export { default } from './merge';

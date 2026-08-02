@@ -349,7 +349,6 @@ const parseEventsForCountry = async ({
           date_end: dateStart,
           source: EVENT_SOURCE.ticketmaster,
           address,
-          ticketmaster_id: event.id,
           _mergeDates: [dateStart],
         };
 

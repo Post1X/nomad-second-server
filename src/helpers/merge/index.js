@@ -7,12 +7,19 @@ export {
   formatHoldingDateNumeric,
   parseHoldingDate,
   mergeHoldingDates,
-  eventFingerprint,
+  nameKey,
+  cityKey,
+  normalize,
 } from './mergeDuplicateEvents';
 export {
   FULL_MATCH_FIELDS,
+  PRIORITY_FIELDS,
   classifyMatchStage,
   applyMergeToExisting,
+  applyPriorityMerge,
+  unionDatesAndPrices,
+  collectDates,
+  mergePhotos,
 } from './upsertStages';
 export {
   pickWinnerSource,

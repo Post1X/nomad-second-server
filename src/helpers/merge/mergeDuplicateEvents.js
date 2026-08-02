@@ -1,4 +1,3 @@
-import crypto from 'crypto';
 import {
   formatHoldingDate,
   formatHoldingDateNumeric,
@@ -24,19 +23,13 @@ export const cityKey = (cityId) => {
   return String(cityId);
 };
 
-/**
- * Global identity fingerprint: name + city (no source — cross-source dedup on second).
- */
-export const eventFingerprint = (name, cityId) => {
-  const raw = `${normalize(name)}\n${cityKey(cityId)}`;
-  return crypto.createHash('sha256').update(raw).digest('hex');
-};
+/** Normalized name key for DB lookup (name + city_id identity). */
+export const nameKey = (name) => normalize(name);
 
 export const mergeDuplicateEvents = (events, { source = '' } = {}) => {
   if (!events || events.length === 0) return [];
 
-  // Within one parse batch still group by name+city (source is uniform in batch)
-  const keyFn = (e) => `${normalize(e.name)}\n${cityKey(e.city_id)}`;
+  const keyFn = (e) => `${nameKey(e.name)}\n${cityKey(e.city_id)}`;
 
   const byKey = new Map();
   for (const e of events) {
@@ -78,7 +71,6 @@ export const mergeDuplicateEvents = (events, { source = '' } = {}) => {
     delete ev._mergeDates;
     result.push(ev);
   }
-
   return result;
 };
 

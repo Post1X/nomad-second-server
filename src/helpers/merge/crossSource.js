@@ -1,74 +1,52 @@
 import { SOURCE_PRIORITY } from '../constants';
-import { applyMergeToExisting, classifyMatchStage } from './upsertStages';
+import { applyPriorityMerge } from './upsertStages';
 
 const sourceRank = (source) => SOURCE_PRIORITY[source] ?? 0;
 
 /**
- * Prefer higher SOURCE_PRIORITY; on tie keep existing (stable parser_unique_id / source).
+ * Higher → merge with incoming as primary.
+ * Equal → merge (incoming = newer for priority fields; dates/photos union).
+ * Lower → discard_incoming.
  */
 export const pickWinnerSource = (existingSource, incomingSource) => {
   const ra = sourceRank(existingSource);
   const rb = sourceRank(incomingSource);
-  if (rb > ra) return 'incoming';
-  return 'existing';
+  if (rb < ra) return 'discard_incoming';
+  return 'incoming'; // higher or equal → merge
 };
 
 /**
- * Merge incoming event into existing ParsedEvents row (possibly other source).
- * Dates/prices always unioned; non-date fields from higher-priority source.
+ * Merge when incoming priority is higher or equal.
+ * address/coords/contacts/... from primary; photos + dates/prices always unioned.
  */
 export const mergeCrossSourceEvent = (existingData, existingSource, incoming, incomingSource) => {
-  const stage = existingData
-    ? classifyMatchStage(
-      { ...existingData, city_id: existingData.city_id },
-      { ...incoming, city_id: incoming.city_id },
-    )
-    : 'insert';
+  const decision = pickWinnerSource(existingSource, incomingSource);
+  if (decision === 'discard_incoming') {
+    return {
+      event: existingData,
+      winnerSource: existingSource,
+      changed: false,
+      discarded: true,
+    };
+  }
 
-  // Force field/date merge path when identity matches (same name+city)
-  const mergeStage = stage === 'insert' ? 'merge_dates_prices' : stage;
-  const { event: dateMerged } = applyMergeToExisting(
-    existingData || {},
-    incoming,
-    mergeStage === 'skip' ? 'update_fields' : mergeStage,
+  const { event } = applyPriorityMerge(
+    { ...existingData, source: existingSource },
+    { ...incoming, source: incomingSource },
+    { primaryIsIncoming: true },
   );
 
-  const winner = pickWinnerSource(existingSource, incomingSource);
-  const primary = winner === 'incoming'
-    ? { ...dateMerged, ...incoming, source: incomingSource }
-    : {
-      ...incoming,
-      ...dateMerged,
-      ...existingData,
-      // keep unioned dates/prices from dateMerged
-      date_start: dateMerged.date_start,
-      date_end: dateMerged.date_end,
-      holding_date: dateMerged.holding_date,
-      min_price: dateMerged.min_price,
-      max_price: dateMerged.max_price,
-      source: existingSource,
-    };
-
-  // description: keep longer
-  const descA = String(existingData?.description || '');
-  const descB = String(incoming.description || '');
-  if (descB.length > descA.length) primary.description = incoming.description;
-
-  primary.parser_unique_id = existingData?.parser_unique_id || incoming.parser_unique_id || null;
-  primary.ticketmaster_id = primary.ticketmaster_id
-    || existingData?.ticketmaster_id
-    || incoming.ticketmaster_id
-    || null;
-
-  const winnerSource = winner === 'incoming' ? incomingSource : existingSource;
+  const winnerSource = incomingSource;
   return {
-    event: { ...primary, source: winnerSource },
+    event: { ...event, source: winnerSource },
     winnerSource,
     changed: true,
+    discarded: false,
   };
 };
 
 export default {
   pickWinnerSource,
   mergeCrossSourceEvent,
+  sourceRank,
 };

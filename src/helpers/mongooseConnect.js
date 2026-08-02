@@ -13,7 +13,7 @@ export default async function (cb) {
 
     logger.info('Connected to db');
 
-    // Drop obsolete indexes (e.g. old unique source+fingerprint) to match schema
+    // Drop obsolete indexes (fingerprint / exported_at) to match schema
     try {
       const dropped = await ParsedEventsSchema.syncIndexes();
       if (dropped?.length) {

@@ -31,6 +31,7 @@ import {
 } from '../helpers/cron';
 import { requestParseRunStop } from '../helpers/logParseRun';
 import { createLoggerWithSource } from '../helpers/logger';
+import { startOfWeekMondayUtc } from '../helpers/eventFilters';
 
 const logger = createLoggerWithSource('PARSING_CONTROLLER');
 
@@ -183,18 +184,16 @@ class ParsingController {
       const page = Math.max(1, parseInt(String(pageParam || 1), 10) || 1);
       const per_page = Math.max(1, Math.min(100, parseInt(String(perPageParam || 20), 10) || 20));
 
+      // Pull window: updated_at >= start of current week (Monday UTC), or explicit updatedSince.
+      // exported_at / onlyPending are deprecated — ignored.
       const filter = { source };
-      if (updatedSince) {
-        const since = new Date(updatedSince);
-        if (!Number.isNaN(since.getTime())) {
-          filter.updatedAt = { $gte: since };
-        }
-      } else if (String(onlyPending || 'true') !== 'false') {
-        filter.$or = [
-          { exported_at: null },
-          { $expr: { $gt: ['$updatedAt', '$exported_at'] } },
-        ];
+      const since = updatedSince
+        ? new Date(updatedSince)
+        : startOfWeekMondayUtc();
+      if (!Number.isNaN(since.getTime())) {
+        filter.updatedAt = { $gte: since };
       }
+      void onlyPending;
 
       const totalEvents = await ParsedEventsSchema.countDocuments(filter);
       const totalPages = Math.max(1, Math.ceil(totalEvents / per_page) || 1);
@@ -211,7 +210,7 @@ class ParsingController {
         _parsed_event_id: pe._id.toString(),
         source: pe.source,
         updatedAt: pe.updatedAt,
-        fingerprint: pe.fingerprint,
+        city_id: pe.city_id || pe.event_data?.city_id || null,
         parser_unique_id: pe.parser_unique_id || pe.event_data?.parser_unique_id || null,
       }));
 
@@ -288,8 +287,8 @@ class ParsingController {
         source: pe.source,
         updatedAt: pe.updatedAt,
         createdAt: pe.createdAt,
-        fingerprint: pe.fingerprint,
-        exported_at: pe.exported_at || null,
+        city_id: pe.city_id || pe.event_data?.city_id || null,
+        name_key: pe.name_key || null,
         parser_unique_id: pe.parser_unique_id || pe.event_data?.parser_unique_id || null,
       }));
 
@@ -308,9 +307,10 @@ class ParsingController {
     }
   };
 
+  /** @deprecated exported_at removed — pull uses updatedAt week window. No-op for compat. */
   static ackEvents = async (req, res, next) => {
     try {
-      const { source: sourceParam, type, ids = [], exportedUntil } = req.body || {};
+      const { source: sourceParam, type } = req.body || {};
       const source = resolveSource(sourceParam || type);
       if (!source) {
         return res.status(400).json({
@@ -319,31 +319,12 @@ class ParsingController {
         });
       }
 
-      const now = new Date();
-      let result;
-
-      if (Array.isArray(ids) && ids.length) {
-        result = await ParsedEventsSchema.updateMany(
-          { source, _id: { $in: ids } },
-          { $set: { exported_at: now } },
-        );
-      } else if (exportedUntil) {
-        const until = new Date(exportedUntil);
-        result = await ParsedEventsSchema.updateMany(
-          { source, updatedAt: { $lte: until } },
-          { $set: { exported_at: now } },
-        );
-      } else {
-        return res.status(400).json({
-          status: 'error',
-          message: 'ids[] or exportedUntil is required',
-        });
-      }
-
       res.json({
         status: 'ok',
-        modified: result.modifiedCount,
+        modified: 0,
         source,
+        deprecated: true,
+        message: 'ack/exported_at removed; pull filters by updatedAt from start of week',
       });
     } catch (error) {
       next(error);
