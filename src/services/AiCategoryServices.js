@@ -3,16 +3,13 @@ import https from 'https';
 import EventsCategoriesSchema from '../schemas/EventsCategoriesSchema';
 import SettingsSchema from '../schemas/SettingsSchema';
 import { AI_CATEGORY_BATCH_CHARS, ENV, SETTINGS_KEYS } from '../helpers/constants';
-import {
-  normalizeCategoryKey,
-  upsertCategorySuggestions,
-} from './CategorySuggestionServices';
+import { normalizeCategoryKey } from './CategorySuggestionServices';
 import { createLoggerWithSource } from '../helpers/logger';
 
 const logger = createLoggerWithSource('AI_CATEGORY');
 
 /** Bump when prompt text changes so cached Settings prompt is rebuilt. */
-const AI_CATEGORY_PROMPT_VERSION = 'v7-concert-not-film';
+const AI_CATEGORY_PROMPT_VERSION = 'v9-existing-only';
 
 const NAME_MAX = 120;
 const DESC_MAX = 200;
@@ -22,32 +19,20 @@ const buildSystemPrompt = (categories) => {
   const list = usable.map((c) => `${c._id}:${c.name}`).join('\n');
   const namesOnly = usable.map((c) => c.name).join(', ');
 
-  return `You categorize events for Nomad. Existing categories ONLY:
+  return `You categorize events for Nomad using EXISTING categories ONLY.
 ${list}
 
-Names for quick scan: ${namesOnly}
+Names: ${namesOnly}
 
-HARD RULES (follow strictly):
-1) ALWAYS assign an existing categoryId if the event is even roughly related by meaning.
-   Examples that MUST map to existing (do NOT suggest new names):
-   - music / concert / DJ / оркестр / disco / genre names (cumbia, jazz…) → Музыка
-   - artist/band + tour / Golden Circle / ticket upgrade / live show → Музыка (NEVER Фильмы)
-   - stand-up / comedy / юмор → Юмор
-   - ballet / musical / circus / nutcracker → Шоу/Мюзиклы or Танцы / Театр
-   - kids / family / children's show / детский → Семейное
-   - exhibition / museum → Выставки or Искусство
-   - lecture / talk / мастер-класс → Лекции/Семинары
-   - film / cinema / movie / watch together / screening → Фильмы ONLY if it is a cinema screening (title mentions film/cinema/movie/сеанс), not a concert
-   - cancelled / postponed / sold out / VIP / premium / elite / friends / fans → null (NOT a category)
-2) Prefer existing over inventing. When in doubt → existing categoryId, suggestedName=null.
-3) suggestedName ONLY for a broad EVENT TYPE missing from the list (e.g. Фильмы, Экскурсии).
-4) suggestedName MUST NOT be: synonym of existing; marketing tier (VIP/Premium/Elite); status (Cancelled);
-   venue/location; person/brand; food dish; music genre; truncated word; "пакеты"/"друзья"/"фанаты".
-5) suggestedName MUST be Russian Cyrillic, 1–2 words, broad, reusable. Never English/Latin-only.
-6) If categoryId is set → suggestedName MUST be null. Never invent category ids.
+RULES:
+1) Return categoryId from the list above if the event roughly fits. Prefer existing over null.
+2) Concerts / bands / DJ / tour / ticket upgrades → Музыка (or closest music id).
+3) Theatre / shows / sports / etc. → matching existing id.
+4) If nothing fits → categoryId=null. Do NOT invent new category names.
+5) Never invent ids.
 
-Return JSON only:
-{"results":[{"id":"...","categoryId":"...|null","suggestedName":"...|null"}]}`;
+JSON only:
+{"results":[{"id":"...","categoryId":"...|null"}]}`;
 };
 
 export const computeCategoriesHash = (categories) => {
@@ -210,20 +195,14 @@ const resolveSuggestionAgainstExisting = (suggestedName, categoryByKey, categori
 };
 
 /**
- * @returns {{
- *  map: Map<string, string|null>,
- *  suggestions: Map<string, string|null>,
- *  usage: object,
- *  suggestionUpsert: object|null,
- *  tokensBySuggestion: Array<{name:string, events:number, tokens:number}>
- * }}
- */
-/**
+ * Assign existing EventsCategories only. Does NOT invent new category names.
+ * New gaps are proposed separately via proposeCategoriesFromEvents.
+ *
  * @param {Array} events
- * @param {{ persistSuggestions?: boolean }} [options]
+ * @param {{ persistSuggestions?: boolean }} [options] persistSuggestions ignored (always off)
  */
 export async function categorizeEventsWithAi(events, options = {}) {
-  const persistSuggestions = options.persistSuggestions !== false;
+  void options;
   const map = new Map();
   const suggestions = new Map();
   const usageTotals = {
@@ -233,7 +212,6 @@ export async function categorizeEventsWithAi(events, options = {}) {
     batches: 0,
     failedBatches: 0,
   };
-  const tokensBySuggestionMap = new Map();
 
   if (!events?.length) {
     return {
@@ -280,8 +258,6 @@ export async function categorizeEventsWithAi(events, options = {}) {
 
   logger.info(`AI categorization: ${events.length} events in ${batches.length} batch(es)`);
 
-  const upsertItems = [];
-
   for (let i = 0; i < batches.length; i += 1) {
     const batch = batches[i];
     const userContent = batch.map(eventPayloadLine).join('\n');
@@ -299,59 +275,24 @@ export async function categorizeEventsWithAi(events, options = {}) {
 
       const results = parseAiResults(content);
       const byId = new Map(results.map((r) => [r.id, r]));
-      const tokensPerEvent = batch.length ? batchTotal / batch.length : 0;
 
       for (const ev of batch) {
         const row = byId.get(ev.tempId) || {};
         let catId = row.categoryId || null;
-        let suggested = row.suggestedName ? String(row.suggestedName).trim() : null;
 
         if (catId && !validCategoryIds.has(String(catId))) {
           catId = null;
         }
 
-        // Collapse synonyms / near-duplicates of existing categories
+        // Legacy model may still return suggestedName — fold into existing if possible
+        const suggested = row.suggestedName ? String(row.suggestedName).trim() : null;
         if (!catId && suggested) {
           const existingId = resolveSuggestionAgainstExisting(suggested, categoryByKey, cats);
-          if (existingId) {
-            catId = existingId;
-            suggested = null;
-          }
+          if (existingId) catId = existingId;
         }
-
-        // Drop Latin / marketing / status junk before persist
-        if (suggested) {
-          const cyr = (suggested.match(/\p{Script=Cyrillic}/gu) || []).length;
-          const lat = (suggested.match(/[A-Za-z]/g) || []).length;
-          if (cyr === 0 || lat > cyr) suggested = null;
-          else if (/(cancel|premium|elite|\bvip\b|fan|friend|пакет|локац)/i.test(suggested)) {
-            suggested = null;
-          }
-        }
-
-        if (catId) suggested = null;
 
         map.set(ev.tempId, catId);
-        suggestions.set(ev.tempId, suggested);
-
-        if (suggested) {
-          const key = normalizeCategoryKey(suggested);
-          const prev = tokensBySuggestionMap.get(key) || {
-            name: suggested,
-            events: 0,
-            tokens: 0,
-          };
-          prev.events += 1;
-          prev.tokens += tokensPerEvent;
-          tokensBySuggestionMap.set(key, prev);
-
-          upsertItems.push({
-            name: suggested,
-            source: ev.source || undefined,
-            exampleEvent: ev.name || '',
-            tokens: tokensPerEvent,
-          });
-        }
+        suggestions.set(ev.tempId, null);
       }
     } catch (e) {
       logger.error(`AI batch ${i + 1}/${batches.length} failed: ${e.message}`);
@@ -363,116 +304,129 @@ export async function categorizeEventsWithAi(events, options = {}) {
     }
   }
 
-  let suggestionUpsert = null;
-  if (upsertItems.length && persistSuggestions) {
-    suggestionUpsert = await upsertCategorySuggestions(upsertItems);
-  } else if (upsertItems.length && !persistSuggestions) {
-    suggestionUpsert = { skippedPersist: true, wouldUpsert: upsertItems.length };
-  }
-
-  const tokensBySuggestion = [...tokensBySuggestionMap.values()]
-    .map((r) => ({
-      name: r.name,
-      events: r.events,
-      tokens: Math.round(r.tokens),
-    }))
-    .sort((a, b) => b.tokens - a.tokens);
-
   logger.info(`OpenAI usage: ${JSON.stringify(usageTotals)}`);
-  if (tokensBySuggestion.length) {
-    logger.info(`Suggestion token shares: ${JSON.stringify(tokensBySuggestion)}`);
-  }
 
   return {
     map,
     suggestions,
     usage: usageTotals,
-    suggestionUpsert,
-    tokensBySuggestion,
+    suggestionUpsert: null,
+    tokensBySuggestion: [],
   };
 }
 
 /**
- * Collapse many raw pending suggestion names into ≤ maxCategories broad RU names.
- * @param {Array<{ raw_name: string, hit_count?: number, tokens_total?: number, example_events?: string[] }>} pending
+ * One-shot: look at a sample of uncategorized events and propose ≤ maxCategories
+ * NEW broad RU types. Each proposed category MUST list exampleIds that truly belong to it.
+ * Concerts must map to existing Музыка via assignments, not into «Фильмы».
+ *
+ * @param {Array<{ tempId: string, name?: string, description?: string, source?: string }>} events
  * @param {{ maxCategories?: number, existingNames?: string[] }} [options]
  */
-export async function consolidateCategorySuggestionsWithAi(pending, options = {}) {
+export async function proposeCategoriesFromEvents(events, options = {}) {
   const maxCategories = Math.max(5, Math.min(20, Number(options.maxCategories) || 20));
   const existingNames = (options.existingNames || []).filter((n) => n && n !== 'Другое');
+  const sample = (events || []).slice(0, 180);
 
-  if (!pending?.length) {
-    return { categories: [], usage: null };
+  if (!sample.length) {
+    return { categories: [], assignments: [], usage: null };
   }
-
   if (!ENV.OPENAI_API_KEY) {
     throw new Error('OPENAI_API_KEY is not set');
   }
 
-  const input = pending
-    .slice(0, 400)
-    .map((p) => ({
-      name: p.raw_name,
-      hits: p.hit_count || 1,
-      tokens: Math.round(p.tokens_total || 0),
-      examples: (p.example_events || []).slice(0, 2),
-    }));
+  const byId = new Map(sample.map((e) => [e.tempId, e]));
 
-  const systemPrompt = `You consolidate messy AI category candidates for Nomad into a SHORT list of broad event types.
+  const systemPrompt = `You analyze uncategorized Nomad events and propose a SHORT list of missing event-type categories.
 
-Existing categories (DO NOT recreate synonyms of these):
+Existing categories (already in DB — do NOT recreate synonyms):
 ${existingNames.join(', ') || '(none)'}
 
-HARD RULES:
-1) Output at most ${maxCategories} canonical categories.
-2) Each name: Russian Cyrillic ONLY, 1–2 words, broad reusable EVENT TYPE (e.g. Фильмы, Экскурсии).
-3) Merge narrow/noisy raw names into one broad name; drop marketing/status junk (Cancelled, VIP, Premium, Fans, Friends, Локация, пакеты).
-4) If a raw name is a synonym/subtype of an EXISTING category — omit it (do not output it).
-5) Music genres → omit (already covered by Музыка if present). Kids shows → omit if Семейное exists.
-6) For each kept category provide:
-   - name (RU)
-   - sources: raw names you merged into it
-   - keywords: 4–10 short match words (RU + useful EN synonyms like movie/cinema for Фильмы)
+TASK:
+1) For each event: if it fits an EXISTING category, set existingName to that exact name; else existingName=null.
+2) Among events with existingName=null, invent at most ${maxCategories} NEW broad Russian category names (1–2 words, Cyrillic).
+3) Every new category MUST include exampleIds of events that clearly belong to THAT type only.
+   - Concerts / bands / Lakeside / Golden Circle / ticket upgrades → existingName=Музыка (if present), NEVER a new «Фильмы».
+   - «Фильмы» only for real cinema (title/desc about film/movie/cinema/сеанс).
+4) Drop junk (Cancelled, VIP, Premium, Fans, venues, brands) — leave existingName=null and do not create a category for them.
+5) keywords: 4–10 RU+EN match words for each new category.
 
-Return JSON only:
-{"categories":[{"name":"Фильмы","sources":["Фильмы","Кино"],"keywords":[{"word":"фильм","value":3},{"word":"movie","value":2}]}]}`;
+JSON only:
+{
+  "assignments":[{"id":"...","existingName":"Музыка|null","newCategory":"Фильмы|null"}],
+  "newCategories":[{"name":"Фильмы","exampleIds":["..."],"keywords":[{"word":"фильм","value":3},{"word":"movie","value":2}]}]
+}`;
 
-  const userContent = `Raw pending candidates (JSON):\n${JSON.stringify(input)}`;
+  const userContent = JSON.stringify(sample.map((e) => ({
+    id: e.tempId,
+    name: (e.name || '').slice(0, NAME_MAX),
+    description: (e.description || '').slice(0, 120),
+  })));
 
   const { content, usage } = await callOpenAi(
     systemPrompt,
     userContent,
-    '{"categories":[{"name":"...","sources":[],"keywords":[{"word":"...","value":1}]}]}',
+    '{"assignments":[],"newCategories":[]}',
   );
 
   let parsed;
   try {
     parsed = JSON.parse(content);
   } catch (e) {
-    logger.error(`Consolidate parse failed: ${e.message}`);
-    throw new Error('Failed to parse consolidate AI response');
+    logger.error(`proposeCategories parse failed: ${e.message}`);
+    throw new Error('Failed to parse proposeCategories AI response');
   }
 
-  const list = Array.isArray(parsed?.categories) ? parsed.categories : [];
-  const categories = list
-    .map((row) => ({
-      name: String(row?.name || '').trim(),
-      sources: Array.isArray(row?.sources)
-        ? row.sources.map((s) => String(s || '').trim()).filter(Boolean)
-        : [],
-      keywords: Array.isArray(row?.keywords)
-        ? row.keywords.map((k) => ({
-          word: String(k?.word || '').trim().toLowerCase(),
-          value: Number(k?.value) || 1,
-        })).filter((k) => k.word)
-        : [],
-    }))
-    .filter((row) => row.name)
-    .slice(0, maxCategories);
+  const existingKeySet = new Set(existingNames.map((n) => normalizeCategoryKey(n)));
+  const assignments = Array.isArray(parsed?.assignments) ? parsed.assignments : [];
+  const rawNew = Array.isArray(parsed?.newCategories) ? parsed.newCategories : [];
 
-  logger.info(`Consolidate AI → ${categories.length} categories (max=${maxCategories})`);
+  // Build example titles only from AI-claimed exampleIds that exist in sample
+  const categories = [];
+  for (const row of rawNew.slice(0, maxCategories)) {
+    const name = String(row?.name || '').trim();
+    const key = normalizeCategoryKey(name);
+    if (!name || !key || existingKeySet.has(key)) continue;
+    if (!/\p{Script=Cyrillic}/u.test(name)) continue;
+    if ((name.match(/[A-Za-z]/g) || []).length > (name.match(/\p{Script=Cyrillic}/gu) || []).length) {
+      continue;
+    }
+
+    const exampleIds = Array.isArray(row.exampleIds) ? row.exampleIds.map(String) : [];
+    const examples = [];
+    for (const id of exampleIds) {
+      const ev = byId.get(id);
+      if (!ev?.name) continue;
+      // Cross-check: AI must also have assigned this id to this newCategory
+      const asg = assignments.find((a) => String(a.id) === id);
+      const claimed = asg?.newCategory ? normalizeCategoryKey(asg.newCategory) : '';
+      if (claimed && claimed !== key) continue;
+      if (asg?.existingName) continue; // belongs to existing — not a new-cat example
+      examples.push(String(ev.name).slice(0, 160));
+      if (examples.length >= 8) break;
+    }
+    if (!examples.length) continue; // no verified examples → drop category
+
+    const keywords = Array.isArray(row.keywords)
+      ? row.keywords.map((k) => ({
+        word: String(k?.word || '').trim().toLowerCase(),
+        value: Number(k?.value) || 1,
+      })).filter((k) => k.word)
+      : [];
+
+    categories.push({
+      name,
+      sources: [],
+      keywords,
+      examples,
+      hit_count: examples.length,
+    });
+  }
+
+  logger.info(`proposeCategories → ${categories.length} (max=${maxCategories})`);
   return {
     categories,
+    assignments,
     usage: {
       prompt_tokens: usage.prompt_tokens || 0,
       completion_tokens: usage.completion_tokens || 0,
@@ -483,9 +437,62 @@ Return JSON only:
   };
 }
 
+/**
+ * Legacy name: consolidate pending label noise by re-proposing from their examples
+ * is no longer the main path — prefer proposeCategoriesFromEvents on real events.
+ * Kept for UI button: collapses pending names only (no event invent).
+ */
+export async function consolidateCategorySuggestionsWithAi(pending, options = {}) {
+  const maxCategories = Math.max(5, Math.min(20, Number(options.maxCategories) || 20));
+  const existingNames = (options.existingNames || []).filter((n) => n && n !== 'Другое');
+
+  if (!pending?.length) {
+    return { categories: [], usage: null };
+  }
+  if (!ENV.OPENAI_API_KEY) {
+    throw new Error('OPENAI_API_KEY is not set');
+  }
+
+  // Treat pending rows as pseudo-events so one propose pass verifies examples
+  const pseudo = [];
+  for (const p of pending.slice(0, 80)) {
+    for (const [idx, ex] of (p.example_events || []).slice(0, 3).entries()) {
+      pseudo.push({
+        tempId: `${String(p._id || p.normalized_key || p.raw_name)}:${idx}`,
+        name: ex,
+        description: '',
+      });
+    }
+    if (!pseudo.length) {
+      pseudo.push({
+        tempId: String(p._id || p.normalized_key || p.raw_name),
+        name: p.raw_name,
+        description: '',
+      });
+    }
+  }
+
+  const { categories, usage } = await proposeCategoriesFromEvents(pseudo, {
+    maxCategories,
+    existingNames,
+  });
+
+  return {
+    categories: categories.map((c) => ({
+      name: c.name,
+      sources: c.sources || [],
+      keywords: c.keywords || [],
+      examples: c.examples || [],
+      hit_count: c.hit_count,
+    })),
+    usage,
+  };
+}
+
 export default {
   rebuildAiPromptIfNeeded,
   categorizeEventsWithAi,
+  proposeCategoriesFromEvents,
   consolidateCategorySuggestionsWithAi,
   computeCategoriesHash,
 };

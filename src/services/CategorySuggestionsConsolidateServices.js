@@ -1,7 +1,6 @@
 import CategorySuggestions from '../schemas/CategorySuggestionsSchema';
 import EventsCategoriesSchema from '../schemas/EventsCategoriesSchema';
 import { buildCategoryKeywords } from '../helpers/buildCategoryKeywords';
-import { exampleFitsCategory } from '../helpers/exampleFitsCategory';
 import { consolidateCategorySuggestionsWithAi } from './AiCategoryServices';
 import {
   normalizeCategoryKey,
@@ -151,34 +150,30 @@ export async function runCategorySuggestionsConsolidate(options = {}) {
           continue;
         }
 
-        let hit_count = 0;
+        // Prefer AI-verified examples from propose pass; fall back to merged pending
+        let examples = Array.isArray(row.examples) ? [...row.examples] : [];
+        let hit_count = Number(row.hit_count) || examples.length;
         let tokens_total = 0;
-        const examples = [];
         const sourcesSet = new Set();
-        const sourceNames = row.sources?.length ? row.sources : [name];
 
-        for (const src of sourceNames) {
-          const srcKey = normalizeCategoryKey(src);
-          const doc = byRawKey.get(srcKey);
-          if (doc) {
-            hit_count += doc.hit_count || 1;
-            tokens_total += doc.tokens_total || 0;
+        for (const src of (row.sources || [])) {
+          const doc = byRawKey.get(normalizeCategoryKey(src));
+          if (!doc) continue;
+          hit_count += doc.hit_count || 0;
+          tokens_total += doc.tokens_total || 0;
+          for (const s of doc.sources || []) sourcesSet.add(s);
+          if (!examples.length) {
             for (const ex of doc.example_events || []) {
-              if (
-                examples.length < 12
-                && !examples.includes(ex)
-                && exampleFitsCategory(name, ex)
-              ) {
-                examples.push(ex);
-              }
+              if (examples.length < 8 && !examples.includes(ex)) examples.push(ex);
             }
-            for (const s of doc.sources || []) sourcesSet.add(s);
-          } else {
-            // unmatched source label — still count as 1 hit for visibility
-            hit_count += 1;
           }
         }
-        if (!hit_count) hit_count = 1;
+        if (!examples.length) {
+          dropped += 1;
+          pushLog(`  drop "${name}" (no verified examples)`);
+          continue;
+        }
+        if (!hit_count) hit_count = examples.length;
 
         const keywords = buildCategoryKeywords(name, examples, row.keywords || []);
         kept.push({
@@ -187,7 +182,7 @@ export async function runCategorySuggestionsConsolidate(options = {}) {
           status: 'pending',
           hit_count,
           tokens_total,
-          example_events: examples,
+          example_events: examples.slice(0, 12),
           keywords,
           sources: [...sourcesSet],
           first_seen_at: new Date(),
@@ -195,8 +190,8 @@ export async function runCategorySuggestionsConsolidate(options = {}) {
           reject_reason: '',
         });
         pushLog(
-          `  keep "${name}" hits=${hit_count} kw=${keywords.length}`
-          + ` ← ${(row.sources || []).slice(0, 5).join(', ')}`,
+          `  keep "${name}" hits=${hit_count} examples=${examples.length}`
+          + ` · ${examples.slice(0, 2).join(' | ')}`,
         );
       }
 

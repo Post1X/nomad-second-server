@@ -4,10 +4,16 @@ import ParsedEventsSchema from '../schemas/ParsedEventsSchema';
 import CategorySuggestions from '../schemas/CategorySuggestionsSchema';
 import SettingsSchema from '../schemas/SettingsSchema';
 import { SETTINGS_KEYS } from '../helpers/constants';
+import { buildCategoryKeywords } from '../helpers/buildCategoryKeywords';
 import {
   categorizeEventsWithAi,
+  proposeCategoriesFromEvents,
   rebuildAiPromptIfNeeded,
 } from './AiCategoryServices';
+import {
+  normalizeCategoryKey,
+  isInvalidSuggestionName,
+} from './CategorySuggestionServices';
 import { createLoggerWithSource } from '../helpers/logger';
 
 const logger = createLoggerWithSource('CAT_SUGGEST_BACKFILL');
@@ -95,8 +101,49 @@ async function loadUncategorized(limit) {
   })).filter((e) => e.name);
 }
 
+async function replacePendingFromPropose(proposed, { dryRun }) {
+  const existing = await EventsCategoriesSchema.find({}).select('name').lean();
+  const existingKeys = new Set(
+    existing.map((c) => normalizeCategoryKey(c.name)).filter(Boolean),
+  );
+
+  const rows = [];
+  for (const cat of proposed || []) {
+    const name = String(cat.name || '').trim();
+    const key = normalizeCategoryKey(name);
+    if (!key || isInvalidSuggestionName(name) || existingKeys.has(key)) continue;
+    const examples = (cat.examples || []).slice(0, 12);
+    if (!examples.length) continue;
+    const keywords = buildCategoryKeywords(name, examples, cat.keywords || []);
+    rows.push({
+      raw_name: name,
+      normalized_key: key,
+      status: 'pending',
+      hit_count: Number(cat.hit_count) || examples.length,
+      tokens_total: 0,
+      example_events: examples,
+      keywords,
+      sources: [],
+      first_seen_at: new Date(),
+      last_seen_at: new Date(),
+      reject_reason: '',
+    });
+  }
+
+  if (dryRun) {
+    return { written: 0, wouldWrite: rows.length, rows };
+  }
+
+  await CategorySuggestions.deleteMany({ status: 'pending' });
+  if (rows.length) await CategorySuggestions.insertMany(rows);
+  return { written: rows.length, wouldWrite: rows.length, rows };
+}
+
 /**
- * @param {{ limit?: number|null, applyCategory?: boolean, chunk?: number, dryRun?: boolean }} options
+ * Phase 1: map events onto EXISTING categories (no invent).
+ * Phase 2: one proposeCategoriesFromEvents on still-open sample → ≤20 pending.
+ *
+ * @param {{ limit?: number|null, applyCategory?: boolean, chunk?: number, dryRun?: boolean, proposeSample?: number, maxCategories?: number }} options
  */
 export async function runCategorySuggestionsBackfill(options = {}) {
   const limit = options.limit != null && options.limit !== ''
@@ -105,6 +152,8 @@ export async function runCategorySuggestionsBackfill(options = {}) {
   const dryRun = Boolean(options.dryRun);
   const applyCategory = Boolean(options.applyCategory) && !dryRun;
   const chunk = Math.max(10, Math.min(80, Number(options.chunk) || 40));
+  const proposeSample = Math.max(40, Math.min(180, Number(options.proposeSample) || 120));
+  const maxCategories = Math.max(5, Math.min(20, Number(options.maxCategories) || 20));
 
   if (job?.running) {
     const err = new Error('Backfill already running');
@@ -122,30 +171,24 @@ export async function runCategorySuggestionsBackfill(options = {}) {
     error: null,
   };
 
-  // fire-and-forget
   setImmediate(async () => {
     let stopped = false;
     try {
       pushLog(
-        `Start backfill limit=${limit ?? 'all'} applyCategory=${applyCategory}`
-        + ` dryRun=${dryRun} chunk=${chunk}`,
+        `Start backfill (existing-only → propose≤${maxCategories})`
+        + ` limit=${limit ?? 'all'} apply=${applyCategory} dryRun=${dryRun}`,
       );
 
       await SettingsSchema.deleteOne({ key: SETTINGS_KEYS.categoriesHash });
       const { categories } = await rebuildAiPromptIfNeeded();
-      pushLog(`Categories: ${(categories || []).map((c) => c.name).join(', ')}`);
+      const existingNames = (categories || []).map((c) => c.name).filter(Boolean);
+      pushLog(`Categories: ${existingNames.join(', ')}`);
 
       const events = await loadUncategorized(limit);
       pushLog(`Uncategorized events: ${events.length}`);
 
       if (!events.length) {
-        job.result = {
-          processed: 0,
-          assignedExisting: 0,
-          suggestedNew: 0,
-          stillNull: 0,
-          usage: null,
-        };
+        job.result = { processed: 0, assignedExisting: 0, stillNull: 0, proposed: 0 };
         pushLog('Nothing to process');
         return;
       }
@@ -159,10 +202,9 @@ export async function runCategorySuggestionsBackfill(options = {}) {
         failedBatches: 0,
       };
       let assignedExisting = 0;
-      let suggestedNew = 0;
       let stillNull = 0;
       let processed = 0;
-      const tokensBySuggestion = new Map();
+      const unresolved = [];
 
       for (let i = 0; i < events.length; i += chunk) {
         if (job.cancelRequested) {
@@ -173,12 +215,10 @@ export async function runCategorySuggestionsBackfill(options = {}) {
 
         const batch = events.slice(i, i + chunk);
         const part = `${Math.floor(i / chunk) + 1}/${Math.ceil(events.length / chunk)}`;
-        pushLog(`Chunk ${part} (n=${batch.length})…`);
+        pushLog(`Chunk ${part} (n=${batch.length}) — existing categories only…`);
 
         // eslint-disable-next-line no-await-in-loop
-        const {
-          map, suggestions, usage, suggestionUpsert, tokensBySuggestion: shares,
-        } = await categorizeEventsWithAi(batch, { persistSuggestions: !dryRun });
+        const { map, usage } = await categorizeEventsWithAi(batch);
 
         usageTotal.prompt_tokens += usage.prompt_tokens || 0;
         usageTotal.completion_tokens += usage.completion_tokens || 0;
@@ -186,21 +226,8 @@ export async function runCategorySuggestionsBackfill(options = {}) {
         usageTotal.batches += usage.batches || 0;
         usageTotal.failedBatches += usage.failedBatches || 0;
 
-        for (const row of shares || []) {
-          const prev = tokensBySuggestion.get(row.name) || { name: row.name, events: 0, tokens: 0 };
-          prev.events += row.events;
-          prev.tokens += row.tokens;
-          tokensBySuggestion.set(row.name, prev);
-        }
-
-        pushLog(
-          `Chunk ${part} usage total_tokens=${usage.total_tokens || 0}`
-          + ` upsert=${JSON.stringify(suggestionUpsert)}`,
-        );
-
         for (const ev of batch) {
           const catId = map.get(ev.tempId) || null;
-          const sug = suggestions.get(ev.tempId) || null;
           if (catId) {
             assignedExisting += 1;
             if (applyCategory) {
@@ -219,41 +246,58 @@ export async function runCategorySuggestionsBackfill(options = {}) {
                 },
               );
             }
-          } else if (sug) {
-            suggestedNew += 1;
-            if (applyCategory) {
-              // eslint-disable-next-line no-await-in-loop
-              await ParsedEventsSchema.updateOne(
-                { _id: ev.parsedId },
-                {
-                  $set: {
-                    'event_data.category_suggested_name': sug,
-                    'event_data.category_resolved_by': 'default_other',
-                  },
-                },
-              );
-            }
           } else {
             stillNull += 1;
+            unresolved.push(ev);
           }
         }
 
         processed += batch.length;
-
-        // sample lines
         for (const ev of batch.slice(0, 3)) {
           const catId = map.get(ev.tempId);
-          const sug = suggestions.get(ev.tempId);
           pushLog(
             `  · ${ev.name.slice(0, 70)} → `
-            + `${catId ? (nameById.get(String(catId)) || catId) : (sug ? `suggest:${sug}` : 'null')}`,
+            + `${catId ? (nameById.get(String(catId)) || catId) : 'null'}`,
           );
         }
       }
 
-      const sharesSorted = [...tokensBySuggestion.values()]
-        .sort((a, b) => b.tokens - a.tokens)
-        .map((r) => ({ ...r, tokens: Math.round(r.tokens) }));
+      let proposed = 0;
+      let proposeUsage = null;
+
+      if (!stopped && unresolved.length && !job.cancelRequested) {
+        const sample = unresolved.slice(0, proposeSample);
+        pushLog(
+          `Propose new categories from ${sample.length}/${unresolved.length}`
+          + ` still-open events (max=${maxCategories})…`,
+        );
+        // eslint-disable-next-line no-await-in-loop
+        const result = await proposeCategoriesFromEvents(sample, {
+          maxCategories,
+          existingNames,
+        });
+        proposeUsage = result.usage;
+        usageTotal.prompt_tokens += result.usage?.prompt_tokens || 0;
+        usageTotal.completion_tokens += result.usage?.completion_tokens || 0;
+        usageTotal.total_tokens += result.usage?.total_tokens || 0;
+
+        // eslint-disable-next-line no-await-in-loop
+        const write = await replacePendingFromPropose(result.categories, { dryRun });
+        proposed = write.written || write.wouldWrite || 0;
+        for (const row of (write.rows || []).slice(0, 20)) {
+          pushLog(
+            `  candidate "${row.raw_name}" examples=${(row.example_events || []).length}`
+            + ` · ${(row.example_events || []).slice(0, 2).join(' | ')}`,
+          );
+        }
+        pushLog(
+          dryRun
+            ? `Dry-run would write ${proposed} pending`
+            : `Wrote ${proposed} pending (replaced old pending list)`,
+        );
+      } else if (!unresolved.length) {
+        pushLog('All events mapped to existing categories — no new candidates');
+      }
 
       const pending = dryRun
         ? null
@@ -262,24 +306,20 @@ export async function runCategorySuggestionsBackfill(options = {}) {
       job.result = {
         processed,
         assignedExisting,
-        suggestedNew,
         stillNull,
+        proposed,
         usage: usageTotal,
-        tokensBySuggestion: sharesSorted,
+        proposeUsage,
         pendingSuggestions: pending,
         dryRun,
         stopped,
       };
 
       pushLog(
-        `${stopped ? 'Stopped' : 'Done'}. processed=${processed}/${events.length}`
-        + ` existing=${assignedExisting} newSuggestions=${suggestedNew} null=${stillNull}`
+        `${stopped ? 'Stopped' : 'Done'}. processed=${processed}`
+        + ` existing=${assignedExisting} open=${stillNull} proposed=${proposed}`
         + `${pending != null ? ` pending=${pending}` : ''}`,
       );
-      pushLog(`Tokens total=${usageTotal.total_tokens}`);
-      for (const row of sharesSorted.slice(0, 15)) {
-        pushLog(`  candidate "${row.name}": events=${row.events} tokens≈${row.tokens}`);
-      }
     } catch (e) {
       job.error = e?.message || String(e);
       pushLog(`ERROR: ${job.error}`);

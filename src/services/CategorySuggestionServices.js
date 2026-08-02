@@ -3,10 +3,6 @@ import EventsCategoriesSchema from '../schemas/EventsCategoriesSchema';
 import SettingsSchema from '../schemas/SettingsSchema';
 import { ENV, SETTINGS_KEYS } from '../helpers/constants';
 import { buildCategoryKeywords } from '../helpers/buildCategoryKeywords';
-import {
-  exampleFitsCategory,
-  filterExamplesForCategory,
-} from '../helpers/exampleFitsCategory';
 import { requestJson } from './cityDiscovery/http';
 import { createLoggerWithSource } from '../helpers/logger';
 
@@ -101,11 +97,6 @@ export async function upsertCategorySuggestions(items = []) {
       else stats.skippedInvalid += 1;
       continue;
     }
-    // e.g. Imagine Dragons Golden Circle must not feed «Фильмы»
-    if (item.exampleEvent && !exampleFitsCategory(raw, item.exampleEvent)) {
-      stats.skippedInvalid += 1;
-      continue;
-    }
     if (!byKey.has(key)) {
       byKey.set(key, {
         raw_name: raw,
@@ -152,9 +143,7 @@ export async function upsertCategorySuggestions(items = []) {
       const examples = [...(existingDoc.example_events || [])];
       for (const ex of row.examples) {
         if (examples.length >= 12) break;
-        if (!examples.includes(ex) && exampleFitsCategory(row.raw_name, ex)) {
-          examples.push(ex);
-        }
+        if (!examples.includes(ex)) examples.push(ex);
       }
       const keywords = buildCategoryKeywords(row.raw_name, examples);
       // eslint-disable-next-line no-await-in-loop
@@ -206,40 +195,16 @@ export async function listCategorySuggestions({
       .lean(),
   ]);
 
-  // Hydrate keywords + scrub bad examples (concerts stuck under «Фильмы», etc.).
   const hydrated = [];
   for (const item of items) {
-    const cleanedExamples = filterExamplesForCategory(
-      item.raw_name,
-      item.example_events || [],
-    );
-    const examplesChanged = cleanedExamples.length !== (item.example_events || []).length
-      || cleanedExamples.some((ex, i) => ex !== (item.example_events || [])[i]);
-
-    let keywords = item.keywords;
-    const needKeywords = !Array.isArray(keywords) || !keywords.length;
-    if (needKeywords) {
-      keywords = buildCategoryKeywords(item.raw_name, cleanedExamples);
+    if (Array.isArray(item.keywords) && item.keywords.length) {
+      hydrated.push(item);
+      continue;
     }
-
-    if (examplesChanged || needKeywords) {
-      // eslint-disable-next-line no-await-in-loop
-      await CategorySuggestions.updateOne(
-        { _id: item._id },
-        {
-          $set: {
-            ...(examplesChanged ? { example_events: cleanedExamples } : {}),
-            ...(needKeywords ? { keywords } : {}),
-          },
-        },
-      );
-    }
-
-    hydrated.push({
-      ...item,
-      example_events: cleanedExamples,
-      keywords: keywords || [],
-    });
+    const keywords = buildCategoryKeywords(item.raw_name, item.example_events || []);
+    // eslint-disable-next-line no-await-in-loop
+    await CategorySuggestions.updateOne({ _id: item._id }, { $set: { keywords } });
+    hydrated.push({ ...item, keywords });
   }
 
   return {
