@@ -105,6 +105,8 @@ const callOpenAi = async (systemPrompt, userContent, jsonHint = null) => {
         'Content-Type': 'application/json',
         'Content-Length': Buffer.byteLength(body),
       },
+      // Discovery chunks are smaller; 3 min is enough per request
+      timeout: 180000,
     }, (res) => {
       let data = '';
       res.on('data', (chunk) => { data += chunk; });
@@ -122,6 +124,10 @@ const callOpenAi = async (systemPrompt, userContent, jsonHint = null) => {
           reject(e);
         }
       });
+    });
+    req.on('timeout', () => {
+      req.destroy();
+      reject(new Error('OpenAI request timeout (180s)'));
     });
     req.on('error', reject);
     req.write(body);
@@ -330,65 +336,42 @@ export async function categorizeEventsWithAi(events, options = {}) {
   };
 }
 
+const mergeDiscoveryCategories = (intoMap, rows, maxCategories) => {
+  for (const row of rows || []) {
+    const name = String(row?.name || '').trim();
+    const key = normalizeCategoryKey(name);
+    if (!key) continue;
+    const prev = intoMap.get(key) || {
+      name,
+      sources: [],
+      keywords: [],
+      examples: [],
+      hit_count: 0,
+    };
+    prev.hit_count += Number(row.hit_count) || 0;
+    for (const ex of row.examples || []) {
+      if (prev.examples.length < 12 && !prev.examples.includes(ex)) prev.examples.push(ex);
+    }
+    const kwMap = new Map(prev.keywords.map((k) => [k.word, k.value]));
+    for (const k of row.keywords || []) {
+      const w = String(k?.word || '').trim().toLowerCase();
+      if (!w) continue;
+      const v = Number(k.value) || 1;
+      if (!kwMap.has(w) || v > kwMap.get(w)) kwMap.set(w, v);
+    }
+    prev.keywords = [...kwMap.entries()].map(([word, value]) => ({ word, value }));
+    if (!prev.name) prev.name = name;
+    intoMap.set(key, prev);
+  }
+  return [...intoMap.values()]
+    .sort((a, b) => b.hit_count - a.hit_count)
+    .slice(0, maxCategories);
+};
+
 /**
- * Discovery (option B): one-shot over a sample of uncategorized events.
- * Uses category cards (A). Proposes ≤ maxCategories NEW types with verified exampleIds.
- * Hits = number of events assigned to that newCategory in the same response.
- *
- * @param {Array<{ tempId: string, name?: string, description?: string, source?: string }>} events
- * @param {{ maxCategories?: number, categories?: Array<{_id:any,name:string}> }} [options]
+ * Parse one discovery AI response into category rows for a chunk.
  */
-export async function proposeCategoriesFromEvents(events, options = {}) {
-  const maxCategories = Math.max(5, Math.min(20, Number(options.maxCategories) || 20));
-  const sample = (events || []).slice(0, 180);
-
-  if (!sample.length) {
-    return { categories: [], assignments: [], usage: null };
-  }
-  if (!ENV.OPENAI_API_KEY) {
-    throw new Error('OPENAI_API_KEY is not set');
-  }
-
-  const dbCats = options.categories
-    || await EventsCategoriesSchema.find({}).sort({ sort: 1 }).lean();
-  const usable = (dbCats || []).filter((c) => c.name && c.name !== 'Другое');
-  const existingNames = usable.map((c) => c.name);
-  const existingKeySet = new Set(existingNames.map((n) => normalizeCategoryKey(n)));
-  const cards = formatCategoryCardsForPrompt(usable);
-  const byId = new Map(sample.map((e) => [e.tempId, e]));
-
-  const systemPrompt = `You discover MISSING event-type categories for Nomad.
-
-EXISTING category cards (prefer these over inventing):
-${cards}
-
-TASK — look at the whole event list together (not one-by-one in isolation):
-1) For each event: if it fits an EXISTING card, set existingName to that exact Russian name; newCategory=null.
-2) Only if it fits NONE of the existing cards → existingName=null and you may assign a newCategory.
-3) Invent at most ${maxCategories} NEW broad Russian names (1–2 Cyrillic words), reusable types.
-4) Every newCategories[].exampleIds MUST be events you also marked with that newCategory in assignments.
-5) Synonyms of existing are forbidden (Концерты≈Музыка, Кино≈ only if no cinema category exists yet as «Фильмы»).
-6) Junk (Cancelled, VIP, Premium, Fans, pure venue names) → both null, no new category.
-7) keywords: 4–10 RU+EN stems per new category.
-
-JSON only:
-{
-  "assignments":[{"id":"...","existingName":"Музыка|null","newCategory":"Фильмы|null"}],
-  "newCategories":[{"name":"Фильмы","exampleIds":["..."],"keywords":[{"word":"фильм","value":3},{"word":"movie","value":2}]}]
-}`;
-
-  const userContent = JSON.stringify(sample.map((e) => ({
-    id: e.tempId,
-    name: (e.name || '').slice(0, NAME_MAX),
-    description: (e.description || '').slice(0, 140),
-  })));
-
-  const { content, usage } = await callOpenAi(
-    systemPrompt,
-    userContent,
-    '{"assignments":[],"newCategories":[]}',
-  );
-
+const parseDiscoveryChunk = (content, chunkEvents, existingKeySet, maxCategories) => {
   let parsed;
   try {
     parsed = JSON.parse(content);
@@ -397,10 +380,10 @@ JSON only:
     throw new Error('Failed to parse proposeCategories AI response');
   }
 
+  const byId = new Map(chunkEvents.map((e) => [e.tempId, e]));
   const assignments = Array.isArray(parsed?.assignments) ? parsed.assignments : [];
   const rawNew = Array.isArray(parsed?.newCategories) ? parsed.newCategories : [];
 
-  // Count cluster size from assignments
   const hitsByNewKey = new Map();
   for (const a of assignments) {
     if (a?.existingName) continue;
@@ -425,18 +408,14 @@ JSON only:
       const ev = byId.get(id);
       if (!ev?.name) continue;
       const asg = assignments.find((a) => String(a.id) === id);
-      if (!asg) continue;
-      if (asg.existingName) continue;
-      const claimed = normalizeCategoryKey(asg.newCategory || '');
-      if (claimed !== key) continue;
+      if (!asg || asg.existingName) continue;
+      if (normalizeCategoryKey(asg.newCategory || '') !== key) continue;
       examples.push(String(ev.name).slice(0, 160));
       if (examples.length >= 8) break;
     }
-    // Fallback: pull examples from assignments if exampleIds incomplete
     if (!examples.length) {
       for (const a of assignments) {
-        if (normalizeCategoryKey(a?.newCategory || '') !== key) continue;
-        if (a.existingName) continue;
+        if (normalizeCategoryKey(a?.newCategory || '') !== key || a.existingName) continue;
         const ev = byId.get(String(a.id));
         if (!ev?.name) continue;
         examples.push(String(ev.name).slice(0, 160));
@@ -461,17 +440,127 @@ JSON only:
     });
   }
 
-  logger.info(`proposeCategories → ${categories.length} (max=${maxCategories})`);
+  return { categories, assignments };
+};
+
+/**
+ * Discovery (option B): process events in small OpenAI chunks, merge candidates.
+ * Smaller chunks finish reliably; we still cover a large sample overall.
+ *
+ * @param {Array<{ tempId: string, name?: string, description?: string, source?: string }>} events
+ * @param {{
+ *  maxCategories?: number,
+ *  categories?: Array<{_id:any,name:string}>,
+ *  chunkSize?: number,
+ *  onChunk?: (info: { part: number, total: number, proposed: number, ms: number }) => void,
+ * }} [options]
+ */
+export async function proposeCategoriesFromEvents(events, options = {}) {
+  const maxCategories = Math.max(5, Math.min(20, Number(options.maxCategories) || 20));
+  const chunkSize = Math.max(20, Math.min(50, Number(options.chunkSize) || 40));
+  const sample = (events || []).slice(0, 160);
+
+  if (!sample.length) {
+    return { categories: [], assignments: [], usage: null };
+  }
+  if (!ENV.OPENAI_API_KEY) {
+    throw new Error('OPENAI_API_KEY is not set');
+  }
+
+  const dbCats = options.categories
+    || await EventsCategoriesSchema.find({}).sort({ sort: 1 }).lean();
+  const usable = (dbCats || []).filter((c) => c.name && c.name !== 'Другое');
+  const existingKeySet = new Set(usable.map((c) => normalizeCategoryKey(c.name)));
+  const cards = formatCategoryCardsForPrompt(usable);
+
+  const systemPrompt = `You discover MISSING event-type categories for Nomad.
+
+EXISTING category cards (prefer these over inventing):
+${cards}
+
+TASK — look at the whole event list together (not one-by-one in isolation):
+1) For each event: if it fits an EXISTING card, set existingName to that exact Russian name; newCategory=null.
+2) Only if it fits NONE of the existing cards → existingName=null and you may assign a newCategory.
+3) Invent at most ${maxCategories} NEW broad Russian names (1–2 Cyrillic words), reusable types.
+4) Every newCategories[].exampleIds MUST be events you also marked with that newCategory in assignments.
+5) Synonyms of existing are forbidden (Концерты≈Музыка, Кино≈ only if no cinema category exists yet as «Фильмы»).
+6) Junk (Cancelled, VIP, Premium, Fans, pure venue names) → both null, no new category.
+7) keywords: 4–10 RU+EN stems per new category.
+
+JSON only:
+{
+  "assignments":[{"id":"...","existingName":"Музыка|null","newCategory":"Фильмы|null"}],
+  "newCategories":[{"name":"Фильмы","exampleIds":["..."],"keywords":[{"word":"фильм","value":3},{"word":"movie","value":2}]}]
+}`;
+
+  const chunks = [];
+  for (let i = 0; i < sample.length; i += chunkSize) {
+    chunks.push(sample.slice(i, i + chunkSize));
+  }
+
+  const mergedMap = new Map();
+  const allAssignments = [];
+  const usageTotal = {
+    prompt_tokens: 0,
+    completion_tokens: 0,
+    total_tokens: 0,
+  };
+
+  for (let ci = 0; ci < chunks.length; ci += 1) {
+    const chunk = chunks[ci];
+    const userContent = JSON.stringify(chunk.map((e) => ({
+      id: e.tempId,
+      name: (e.name || '').slice(0, NAME_MAX),
+      description: (e.description || '').slice(0, 140),
+      address: (e.address || '').slice(0, 120) || undefined,
+    })));
+
+    const t0 = Date.now();
+    // eslint-disable-next-line no-await-in-loop
+    const { content, usage } = await callOpenAi(
+      systemPrompt,
+      userContent,
+      '{"assignments":[],"newCategories":[]}',
+    );
+    const ms = Date.now() - t0;
+
+    usageTotal.prompt_tokens += usage.prompt_tokens || 0;
+    usageTotal.completion_tokens += usage.completion_tokens || 0;
+    usageTotal.total_tokens += usage.total_tokens
+      || ((usage.prompt_tokens || 0) + (usage.completion_tokens || 0));
+
+    const { categories: partCats, assignments } = parseDiscoveryChunk(
+      content,
+      chunk,
+      existingKeySet,
+      maxCategories,
+    );
+    allAssignments.push(...assignments);
+    mergeDiscoveryCategories(mergedMap, partCats, maxCategories);
+
+    logger.info(
+      `proposeCategories chunk ${ci + 1}/${chunks.length}: `
+      + `n=${chunk.length} proposed=${partCats.length} ${Math.round(ms / 1000)}s`,
+    );
+    if (typeof options.onChunk === 'function') {
+      options.onChunk({
+        part: ci + 1,
+        total: chunks.length,
+        proposed: partCats.length,
+        ms,
+      });
+    }
+  }
+
+  const categories = [...mergedMap.values()]
+    .sort((a, b) => b.hit_count - a.hit_count)
+    .slice(0, maxCategories);
+
+  logger.info(`proposeCategories merged → ${categories.length} (max=${maxCategories})`);
   return {
     categories,
-    assignments,
-    usage: {
-      prompt_tokens: usage.prompt_tokens || 0,
-      completion_tokens: usage.completion_tokens || 0,
-      total_tokens: usage.total_tokens || (
-        (usage.prompt_tokens || 0) + (usage.completion_tokens || 0)
-      ),
-    },
+    assignments: allAssignments,
+    usage: usageTotal,
   };
 }
 

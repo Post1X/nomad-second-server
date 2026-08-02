@@ -168,8 +168,8 @@ const logProgress = async (runId, message) => {
 
 moment.locale('ru');
 
-async function parseKontramarka({ meta = {}, runId, operationId }) {
-  const parseRunId = runId || operationId;
+async function parseKontramarka({ meta = {}, runId }) {
+  const parseRunId = runId;
   const events = [];
   const errorTexts = [];
   const infoTexts = [];
@@ -275,7 +275,7 @@ async function parseKontramarka({ meta = {}, runId, operationId }) {
               };
             }).filter(Boolean));
 
-            const groupKey = (name, address) => `${String(name).trim()}\n${String(address).trim()}`;
+            const groupKey = (name, city) => `${String(name).trim()}\n${String(city || '')}`;
             const groups = new Map();
 
             for (const slot of slots) {
@@ -300,7 +300,7 @@ async function parseKontramarka({ meta = {}, runId, operationId }) {
               const dateStart = slot.startIso ? new Date(slot.startIso) : null;
               const dateEnd = slot.endIso ? new Date(slot.endIso) : dateStart;
               const address = [slot.place || card.venue, slot.address || cityItem.name.split('|')[0]].filter(Boolean).join(', ');
-              const key = groupKey(card.title, address);
+              const key = groupKey(card.title, resolvedCityId);
 
               if (!groups.has(key)) {
                 groups.set(key, {
@@ -333,7 +333,6 @@ async function parseKontramarka({ meta = {}, runId, operationId }) {
                 admin_id: adminId,
                 country_id: g.resolvedCountryId,
                 city_id: g.resolvedCityId,
-                operationId: operationId,
                 contacts: { website: g.tourUrl },
                 photos: g.photoUrl ? [{ full_url: g.photoUrl }] : [],
                 holding_date: holdingDateStr,
@@ -376,6 +375,7 @@ async function parseKontramarka({ meta = {}, runId, operationId }) {
           await logProgress(parseRunId, cityStats);
         }
       } catch (e) {
+        if (e?.cancelled) throw e;
         const errMsg = `Error for city ${cityItem.name}: ${e?.message || e}`;
         infoTexts.push(errMsg);
         await logProgress(parseRunId, `WARNING: ${errMsg}`);
@@ -391,6 +391,7 @@ async function parseKontramarka({ meta = {}, runId, operationId }) {
     await logProgress(parseRunId, 'Browser closed');
     await logProgress(parseRunId, `Parsing completed. Total: ${(allEvents || []).length} events`);
   } catch (e) {
+    if (e?.cancelled) throw e;
     const errMsg = e?.message || 'Unknown error while parsing Kontramarka';
     errorTexts.push(errMsg);
     await logProgress(parseRunId, `FATAL ERROR: ${errMsg}`);
@@ -419,6 +420,7 @@ async function parseKontramarka({ meta = {}, runId, operationId }) {
       extraStatistics: { citySuggestions: citySuggestionStats },
     });
   } catch (error) {
+    if (error?.cancelled) throw error;
     await ParseRunsSchema.findByIdAndUpdate(parseRunId, {
       status: 'error',
       errorText: error.message || 'Unknown error while saving events',

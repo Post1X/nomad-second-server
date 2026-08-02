@@ -2,15 +2,18 @@ import mongoose, { Schema } from 'mongoose';
 import { EVENT_SOURCE } from '../helpers/constants';
 
 const ParsedEventsSchema = new mongoose.Schema({
+  /** Winning source after cross-source merge (SOURCE_PRIORITY). */
   source: {
     type: String,
     enum: Object.values(EVENT_SOURCE).filter((s) => s !== EVENT_SOURCE.nomad),
     required: true,
     index: true,
   },
+  /** Global identity: sha256(name + city_id) — unique across all sources. */
   fingerprint: {
     type: String,
     required: true,
+    unique: true,
     index: true,
   },
   /** Stable id for main pull create/update (also copied into event_data). */
@@ -19,7 +22,7 @@ const ParsedEventsSchema = new mongoose.Schema({
     required: false,
   },
   event_data: {
-    type: Schema.Types.Mixed,
+    type: mongoose.Schema.Types.Mixed,
     required: true,
   },
   parse_run: {
@@ -37,7 +40,6 @@ const ParsedEventsSchema = new mongoose.Schema({
   timestamps: true,
 });
 
-ParsedEventsSchema.index({ source: 1, fingerprint: 1 }, { unique: true });
 ParsedEventsSchema.index(
   { parser_unique_id: 1 },
   { unique: true, partialFilterExpression: { parser_unique_id: { $type: 'string' } } },

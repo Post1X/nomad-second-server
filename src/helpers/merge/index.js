@@ -14,13 +14,15 @@ export {
   classifyMatchStage,
   applyMergeToExisting,
 } from './upsertStages';
+export {
+  pickWinnerSource,
+  mergeCrossSourceEvent,
+} from './crossSource';
 
 export const mergeDuplicateEventsForSource = (events, source) => {
-  const opts = {
+  return mergeDuplicateEvents(events || [], {
     source: source || EVENT_SOURCE.nomad,
-    includeCityInKey: false,
-  };
-  return mergeDuplicateEvents(events || [], opts);
+  });
 };
 
 export default mergeDuplicateEventsForSource;

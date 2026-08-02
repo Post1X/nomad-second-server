@@ -140,7 +140,7 @@ export async function runCategorySuggestionsBackfill(options = {}) {
   const dryRun = Boolean(options.dryRun);
   const applyCategory = Boolean(options.applyCategory) && !dryRun;
   const chunk = Math.max(10, Math.min(80, Number(options.chunk) || 40));
-  const proposeSample = Math.max(40, Math.min(180, Number(options.proposeSample) || 150));
+  const proposeSample = Math.max(40, Math.min(160, Number(options.proposeSample) || 120));
   const maxCategories = Math.max(5, Math.min(20, Number(options.maxCategories) || 20));
   const skipDiscovery = Boolean(options.skipDiscovery);
 
@@ -256,6 +256,10 @@ export async function runCategorySuggestionsBackfill(options = {}) {
         const result = await proposeCategoriesFromEvents(sample, {
           maxCategories,
           categories,
+          chunkSize: 40,
+          onChunk: ({ part, total, proposed: n, ms }) => {
+            pushLog(`  discovery chunk ${part}/${total} ${Math.round(ms / 1000)}s (+${n})`);
+          },
         });
         usageTotal.prompt_tokens += result.usage?.prompt_tokens || 0;
         usageTotal.completion_tokens += result.usage?.completion_tokens || 0;

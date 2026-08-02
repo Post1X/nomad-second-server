@@ -8,6 +8,7 @@ import { findCountryByIso, resolveTicketmasterCountryCodes } from '../helpers/is
 import findCityInDb from '../helpers/cityMatching';
 import { createLoggerWithSource } from '../helpers/logger';
 import saveProcessedEvents from '../helpers/saveProcessedEvents';
+import { assertParseRunActive, logParseRun } from '../helpers/logParseRun';
 import createCitySuggestionCollector from '../helpers/createCitySuggestionCollector';
 import {
   hasSufficientTicketmasterText,
@@ -222,7 +223,6 @@ const parseEventsForCountry = async ({
   cities,
   countries,
   meta,
-  operationId,
   startFrom,
   pageSize,
   maxPages,
@@ -342,7 +342,6 @@ const parseEventsForCountry = async ({
           city_id: resolvedCityId
             ? (resolvedCityId?.toString ? resolvedCityId.toString() : String(resolvedCityId))
             : null,
-          operationId,
           contacts: { website: event.url || '' },
           photos: imageUrl ? [{ full_url: imageUrl }] : [],
           holding_date: formatHoldingDate([dateStart]),
@@ -402,8 +401,8 @@ const parseEventsForCountry = async ({
 
 moment.locale('ru');
 
-async function parseTicketmaster({ meta = {}, runId, operationId }) {
-  const parseRunId = runId || operationId;
+async function parseTicketmaster({ meta = {}, runId }) {
+  const parseRunId = runId;
   const events = [];
   const errorTexts = [];
   const infoTexts = [];
@@ -441,6 +440,10 @@ async function parseTicketmaster({ meta = {}, runId, operationId }) {
     const startFrom = startDateTime || new Date().toISOString().replace(/\.\d{3}Z$/, 'Z');
 
     for (const countryCode of countryCodes) {
+      // eslint-disable-next-line no-await-in-loop
+      await assertParseRunActive(parseRunId);
+      // eslint-disable-next-line no-await-in-loop
+      await logParseRun(parseRunId, `[${new Date().toISOString()}] Country ${countryCode}…`);
       const { cities } = filterCitiesForCountry(citiesAll, countries, countryCode, meta);
 
       try {
@@ -451,7 +454,6 @@ async function parseTicketmaster({ meta = {}, runId, operationId }) {
           cities,
           countries,
           meta,
-          operationId,
           startFrom,
           pageSize,
           maxPages,
@@ -466,6 +468,7 @@ async function parseTicketmaster({ meta = {}, runId, operationId }) {
         parsedByCountry[countryCode] = result.events.length;
         countriesProcessed += 1;
       } catch (countryError) {
+        if (countryError?.cancelled) throw countryError;
         const msg = `${countryCode}: ${countryError?.message || countryError}`;
         errorTexts.push(msg);
         logger.error(msg);
@@ -476,6 +479,7 @@ async function parseTicketmaster({ meta = {}, runId, operationId }) {
       await sleep(REQUEST_DELAY_MS);
     }
   } catch (e) {
+    if (e?.cancelled) throw e;
     const errMsg = e?.message || 'Unknown error while parsing Ticketmaster';
     errorTexts.push(errMsg);
     logger.error(`FATAL ERROR: ${errMsg}`, e);
@@ -523,6 +527,7 @@ async function parseTicketmaster({ meta = {}, runId, operationId }) {
       extraStatistics,
     });
   } catch (error) {
+    if (error?.cancelled) throw error;
     logger.error(`Error saving events to database: ${error.message || error}`, error);
   }
 }

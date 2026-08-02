@@ -10,6 +10,7 @@ import parseEventim from '../operations/parseEventim';
 import parseKontramarka from '../operations/parseKontramarka';
 import parseTicketmaster from '../operations/parseTicketmaster';
 import parseIsraelinfo from '../operations/parseIsraelinfo';
+import { ParseRunCancelledError, markParseRunCancelled } from './logParseRun';
 import { createLoggerWithSource } from './logger';
 
 const logger = createLoggerWithSource('START_PARSE_RUN');
@@ -35,6 +36,17 @@ export async function startParseRun(typeOrSource, meta = {}) {
     throw new Error(`Invalid parser type/source: ${typeOrSource}`);
   }
 
+  const active = await ParseRunsSchema.findOne({
+    source,
+    status: { $in: [OPERATION_STATUSES.pending, OPERATION_STATUSES.processing] },
+  }).lean();
+  if (active) {
+    const err = new Error(`Parse already running for ${source} (${active._id})`);
+    err.status = 409;
+    err.activeRunId = active._id;
+    throw err;
+  }
+
   const run = new ParseRunsSchema({
     source,
     status: OPERATION_STATUSES.pending,
@@ -43,6 +55,7 @@ export async function startParseRun(typeOrSource, meta = {}) {
     infoText: 'Parse run created, starting...',
     meta: meta || {},
     startedAt: new Date(),
+    cancelRequested: false,
   });
   await run.save();
 
@@ -53,8 +66,13 @@ export async function startParseRun(typeOrSource, meta = {}) {
         infoText: 'Parsing started...',
       });
 
-      await PARSERS[type]({ meta, runId: run._id, operationId: run._id });
+      await PARSERS[type]({ meta, runId: run._id });
     } catch (error) {
+      if (error instanceof ParseRunCancelledError || error?.cancelled) {
+        logger.info(`Parse run ${run._id} cancelled`);
+        await markParseRunCancelled(run._id, 'Stopped by user');
+        return;
+      }
       logger.error(`Error in parse run ${run._id}: ${error.message || error}`);
       await ParseRunsSchema.findByIdAndUpdate(run._id, {
         status: OPERATION_STATUSES.error,

@@ -18,23 +18,25 @@ export const normalize = (s) => String(s || '')
   .toLowerCase()
   .replace(/\s+/g, ' ');
 
-export const eventFingerprint = (source, name, address) => {
-  const raw = `${source || ''}\n${normalize(name)}\n${normalize(address)}`;
+/** Stable city key for merge (ObjectId or empty if unknown). */
+export const cityKey = (cityId) => {
+  if (cityId == null || cityId === '') return '';
+  return String(cityId);
+};
+
+/**
+ * Global identity fingerprint: name + city (no source — cross-source dedup on second).
+ */
+export const eventFingerprint = (name, cityId) => {
+  const raw = `${normalize(name)}\n${cityKey(cityId)}`;
   return crypto.createHash('sha256').update(raw).digest('hex');
 };
 
-export const mergeDuplicateEvents = (events, { source = '', includeCityInKey = false } = {}) => {
+export const mergeDuplicateEvents = (events, { source = '' } = {}) => {
   if (!events || events.length === 0) return [];
 
-  const keyFn = (e) => {
-    const name = normalize(e.name);
-    const address = normalize(e.address);
-    if (includeCityInKey) {
-      const city = e.city_id ? String(e.city_id) : '';
-      return `${source}\n${name}\n${address}\n${city}`;
-    }
-    return `${source}\n${name}\n${address}`;
-  };
+  // Within one parse batch still group by name+city (source is uniform in batch)
+  const keyFn = (e) => `${normalize(e.name)}\n${cityKey(e.city_id)}`;
 
   const byKey = new Map();
   for (const e of events) {
@@ -65,6 +67,7 @@ export const mergeDuplicateEvents = (events, { source = '', includeCityInKey = f
 
     const ev = {
       ...first,
+      source: source || first.source,
       description: longerDesc.description || first.description,
       date_start: dateStart,
       date_end: dateEnd,

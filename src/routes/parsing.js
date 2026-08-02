@@ -16,8 +16,19 @@ router.get('/events', ParsingController.getEvents);
 router.post('/events/ack', ParsingController.ackEvents);
 router.get('/runs', ParsingController.getRuns);
 router.get('/results/:runId', ParsingController.getResults);
-router.get('/results/operation/:operationId', ParsingController.getResults);
-router.get('/operations', ParsingController.getOperations);
+router.post('/runs/:runId/stop', ParsingController.stopParseRun);
+router.get('/cron', ParsingController.getCron);
+router.post('/cron/stop', ParsingController.stopCron);
+router.post('/cron/start', ParsingController.startCron);
+router.post('/cron/:jobId/enable', (req, res, next) => {
+  req.body = { ...(req.body || {}), enabled: true };
+  return ParsingController.setCronJob(req, res, next);
+});
+router.post('/cron/:jobId/disable', (req, res, next) => {
+  req.body = { ...(req.body || {}), enabled: false };
+  return ParsingController.setCronJob(req, res, next);
+});
+router.post('/cron/:jobId/run', ParsingController.runCronJobNow);
 router.get('/stats/weekly', ParsingController.getWeeklyStats);
 router.get('/stats/backfill', ParsingController.getBackfillStats);
 router.post('/cleanup', ParsingController.cleanup);

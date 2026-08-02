@@ -60,7 +60,8 @@ export const stopCategorySuggestionsConsolidate = () => {
  */
 export async function runCategorySuggestionsConsolidate(options = {}) {
   const maxCategories = Math.max(5, Math.min(20, Number(options.maxCategories) || 20));
-  const sampleSize = Math.max(40, Math.min(180, Number(options.sampleSize) || 150));
+  // Total events to cover; split into ~40-sized OpenAI calls (we wait for all chunks)
+  const sampleSize = Math.max(40, Math.min(160, Number(options.sampleSize) || 120));
   const limit = options.limit != null
     ? Math.max(1, Math.min(5000, Number(options.limit) || 0))
     : sampleSize * 3;
@@ -104,11 +105,17 @@ export async function runCategorySuggestionsConsolidate(options = {}) {
       }
 
       const sample = pool.slice(0, sampleSize);
-      pushLog(`Calling proposeCategoriesFromEvents(n=${sample.length})…`);
+      pushLog(`OpenAI discovery: ${sample.length} events in chunks of ~40 (wait for all)…`);
+      const t0 = Date.now();
       const { categories: proposed, usage } = await proposeCategoriesFromEvents(sample, {
         maxCategories,
         categories,
+        chunkSize: 40,
+        onChunk: ({ part, total, proposed: n, ms }) => {
+          pushLog(`  chunk ${part}/${total} done in ${Math.round(ms / 1000)}s (+${n} cats)`);
+        },
       });
+      pushLog(`All chunks done in ${Math.round((Date.now() - t0) / 1000)}s, merged=${proposed.length}`);
 
       if (job.cancelRequested) {
         job.result = { stopped: true, usage };

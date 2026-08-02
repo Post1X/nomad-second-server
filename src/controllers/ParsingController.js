@@ -23,6 +23,13 @@ import {
   SOURCE_BY_OPERATION_TYPE,
 } from '../helpers/constants';
 import startParseRun from '../helpers/startParseRun';
+import {
+  getCronStatus,
+  runCronJob,
+  setCronJobEnabled,
+  setParsingCronEnabled,
+} from '../helpers/cron';
+import { requestParseRunStop } from '../helpers/logParseRun';
 import { createLoggerWithSource } from '../helpers/logger';
 
 const logger = createLoggerWithSource('PARSING_CONTROLLER');
@@ -63,10 +70,93 @@ class ParsingController {
       res.json({
         status: 'ok',
         runId: runId.toString(),
-        operationId: runId.toString(),
         message: 'Parse run created and started',
       });
     } catch (error) {
+      if (error?.status) {
+        return res.status(error.status).json({
+          status: 'error',
+          message: error.message,
+          activeRunId: error.activeRunId ? String(error.activeRunId) : undefined,
+        });
+      }
+      next(error);
+    }
+  };
+
+  static getCron = async (req, res, next) => {
+    try {
+      const cronStatus = await getCronStatus();
+      res.json({ status: 'ok', cron: cronStatus });
+    } catch (error) {
+      next(error);
+    }
+  };
+
+  static stopCron = async (req, res, next) => {
+    try {
+      await setParsingCronEnabled(false);
+      res.json({ status: 'ok', cron: await getCronStatus() });
+    } catch (error) {
+      next(error);
+    }
+  };
+
+  static startCron = async (req, res, next) => {
+    try {
+      await setParsingCronEnabled(true);
+      res.json({ status: 'ok', cron: await getCronStatus() });
+    } catch (error) {
+      next(error);
+    }
+  };
+
+  static setCronJob = async (req, res, next) => {
+    try {
+      const { jobId } = req.params;
+      const enabled = req.body?.enabled;
+      if (typeof enabled !== 'boolean') {
+        return res.status(400).json({ status: 'error', message: 'body.enabled boolean required' });
+      }
+      await setCronJobEnabled(jobId, enabled);
+      res.json({ status: 'ok', cron: await getCronStatus() });
+    } catch (error) {
+      if (error?.status) {
+        return res.status(error.status).json({ status: 'error', message: error.message });
+      }
+      next(error);
+    }
+  };
+
+  static runCronJobNow = async (req, res, next) => {
+    try {
+      const { jobId } = req.params;
+      const result = await runCronJob(jobId, {
+        force: true,
+        ignoreEnabled: true,
+      });
+      res.json({ status: 'ok', result, cron: await getCronStatus() });
+    } catch (error) {
+      if (error?.status) {
+        return res.status(error.status).json({
+          status: 'error',
+          message: error.message,
+          activeRunId: error.activeRunId ? String(error.activeRunId) : undefined,
+        });
+      }
+      next(error);
+    }
+  };
+
+  static stopParseRun = async (req, res, next) => {
+    try {
+      const { runId } = req.params;
+      const run = await requestParseRunStop(runId);
+      res.json({ status: 'ok', run });
+    } catch (error) {
+      if (error?.status) {
+        return res.status(error.status).json({ status: 'error', message: error.message });
+      }
       next(error);
     }
   };
@@ -313,9 +403,8 @@ class ParsingController {
 
   static getResults = async (req, res, next) => {
     try {
-      const { operationId, runId } = req.params;
-      const id = runId || operationId;
-      const run = await ParseRunsSchema.findById(id).lean();
+      const { runId } = req.params;
+      const run = await ParseRunsSchema.findById(runId).lean();
       if (!run) {
         return res.status(404).json({
           status: 'error',
@@ -323,22 +412,16 @@ class ParsingController {
         });
       }
 
-      const parsedEvents = await ParsedEventsSchema.find({ parse_run: id }).lean();
+      const parsedEvents = await ParsedEventsSchema.find({ parse_run: runId }).lean();
       res.json({
         status: 'ok',
         run,
-        operation: run,
         events: parsedEvents.map((pe) => pe.event_data),
         totalEvents: parsedEvents.length,
       });
     } catch (error) {
       next(error);
     }
-  };
-
-  static getOperations = async (req, res, next) => {
-    req.query.onlyPending = req.query.onlyPending || 'true';
-    return ParsingController.getEvents(req, res, next);
   };
 
   static cleanup = async (req, res, next) => {
@@ -578,6 +661,7 @@ class ParsingController {
               $set: {
                 name: cat.name,
                 sort: cat.sort ?? 999,
+                keywords: Array.isArray(cat.keywords) ? cat.keywords : [],
               },
             },
             { upsert: true, setDefaultsOnInsert: true },

@@ -51,16 +51,17 @@ async function testHelpers() {
   const { detectCategoryByKeywords } = await import('../src/services/CategoryKeywordServices.js');
   const EventsCategoriesSchema = (await import('../src/schemas/EventsCategoriesSchema.js')).default;
 
-  const fp1 = eventFingerprint('eventim', 'Concert Night', 'Berlin, Hall 1');
-  const fp2 = eventFingerprint('eventim', 'Concert Night', 'Berlin, Hall 1');
-  const fp3 = eventFingerprint('fienta', 'Concert Night', 'Berlin, Hall 1');
-  if (fp1 === fp2 && fp1 !== fp3) ok('fingerprint unique by source', fp1.slice(0, 12));
-  else fail('fingerprint unique by source', `${fp1} / ${fp3}`);
+  const fp1 = eventFingerprint('Concert Night', 'cityBerlin');
+  const fp2 = eventFingerprint('Concert Night', 'cityBerlin');
+  const fp3 = eventFingerprint('Concert Night', 'cityMunich');
+  if (fp1 === fp2 && fp1 !== fp3) ok('fingerprint global by name+city', fp1.slice(0, 12));
+  else fail('fingerprint global by name+city', `${fp1} / ${fp3}`);
 
   const merged = mergeDuplicateEventsForSource([
     {
       name: 'Jazz Live',
-      address: 'Tallinn',
+      city_id: 'tallinnId',
+      address: 'Tallinn Hall A',
       date_start: new Date('2026-08-01'),
       min_price: 10,
       max_price: 10,
@@ -68,7 +69,8 @@ async function testHelpers() {
     },
     {
       name: 'Jazz Live',
-      address: 'Tallinn',
+      city_id: 'tallinnId',
+      address: 'Tallinn Hall B spelling',
       date_start: new Date('2026-08-02'),
       min_price: 20,
       max_price: 30,
@@ -167,7 +169,7 @@ async function testSecondApi() {
   // Seed a synthetic ParsedEvent via mongoose to test ack flow
   const ParsedEvents = (await import('../src/schemas/ParsedEventsSchema.js')).default;
   const { eventFingerprint } = await import('../src/helpers/merge/index.js');
-  const fingerprint = eventFingerprint('eventim', `__smoke_${Date.now()}`, 'Smoke Address 1');
+  const fingerprint = eventFingerprint(`__smoke_${Date.now()}`, 'smokeCityId');
   const doc = await ParsedEvents.create({
     source: 'eventim',
     fingerprint,

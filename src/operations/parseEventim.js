@@ -282,8 +282,8 @@ const logProgress = async (runId, message) => {
   await logParseRun(runId, `[${new Date().toISOString()}] ${message}`);
 };
 
-async function parseEventim({ meta = {}, runId, operationId }) {
-  const parseRunId = runId || operationId;
+async function parseEventim({ meta = {}, runId }) {
+  const parseRunId = runId;
   const events = [];
   const errorTexts = [];
   const infoTexts = [];
@@ -437,7 +437,6 @@ async function parseEventim({ meta = {}, runId, operationId }) {
           city_id: resolvedCityId
             ? (resolvedCityId?.toString ? resolvedCityId.toString() : String(resolvedCityId))
             : null,
-          operationId: operationId,
           contacts: { website: event.eventLink || series.esLink || '' },
           photos: photoUrl ? [{ full_url: photoUrl }] : [],
           holding_date: holdingDate,
@@ -477,6 +476,7 @@ async function parseEventim({ meta = {}, runId, operationId }) {
 
     await logProgress(parseRunId, `Parsing completed. Total: ${events.length} events parsed`);
   } catch (e) {
+    if (e?.cancelled) throw e;
     const errMsg = e?.message || 'Unknown error while parsing Eventim';
     errorTexts.push(errMsg);
     logger.error(`FATAL ERROR: ${errMsg}`, e);
@@ -506,6 +506,7 @@ async function parseEventim({ meta = {}, runId, operationId }) {
       extraStatistics: { citySuggestions: citySuggestionStats },
     });
   } catch (error) {
+    if (error?.cancelled) throw error;
     logger.error(`Error saving events to database: ${error.message || error}`, error);
   }
 }

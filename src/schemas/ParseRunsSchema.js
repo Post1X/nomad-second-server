@@ -37,6 +37,10 @@ const ParseRunsSchema = new mongoose.Schema({
   finishedAt: {
     type: Date,
   },
+  cancelRequested: {
+    type: Boolean,
+    default: false,
+  },
 }, {
   timestamps: true,
 });

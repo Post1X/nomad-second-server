@@ -11,6 +11,7 @@ export const OPERATION_STATUSES = {
   error: 'error',
   pending: 'pending',
   processing: 'processing',
+  cancelled: 'cancelled',
 };
 
 export const EVENT_SOURCE = {
@@ -20,6 +21,19 @@ export const EVENT_SOURCE = {
   eventim: 'eventim',
   ticketmaster: 'ticketmaster',
   israelinfo: 'israelinfo',
+};
+
+/**
+ * Higher number wins on cross-source merge (second server).
+ * eventim / ticketmaster / israelinfo > kontramarka / fienta.
+ */
+export const SOURCE_PRIORITY = {
+  [EVENT_SOURCE.eventim]: 100,
+  [EVENT_SOURCE.ticketmaster]: 100,
+  [EVENT_SOURCE.israelinfo]: 90,
+  [EVENT_SOURCE.kontramarka]: 50,
+  [EVENT_SOURCE.fienta]: 50,
+  [EVENT_SOURCE.nomad]: 10,
 };
 
 export const EXPIRED_EVENTS_CLEANUP_MONTHS = 6;
@@ -33,6 +47,10 @@ export const SETTINGS_KEYS = {
   categoriesHash: 'categories_hash',
   lastTicketmasterParseAt: 'last_ticketmaster_parse_at',
   lastTicketmasterPullAt: 'last_ticketmaster_pull_at',
+  /** false → scheduled parser crons skip (manual create still works) */
+  parsingCronEnabled: 'parsing_cron_enabled',
+  /** per-job flags: { kontramarka: true, cleanup: true, ... } */
+  parsingCronJobs: 'parsing_cron_jobs',
 };
 
 export const SOURCE_BY_OPERATION_TYPE = {

@@ -56,8 +56,8 @@ export const classifyMatchStage = (existing, incoming) => {
   if (!existing) return 'insert';
 
   const nameOk = normalize(existing.name) === normalize(incoming.name);
-  const addrOk = normalize(existing.address) === normalize(incoming.address);
-  if (!nameOk || !addrOk) return 'insert';
+  const cityOk = String(existing.city_id || '') === String(incoming.city_id || '');
+  if (!nameOk || !cityOk) return 'insert';
 
   const allSame = FULL_MATCH_FIELDS.every((field) => {
     if (field === 'name' || field === 'address') return true;

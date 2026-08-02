@@ -5,7 +5,7 @@ import { createLoggerWithSource } from '../helpers/logger';
 const logger = createLoggerWithSource('LOOKUP_EVENTS');
 
 /**
- * Batch lookup ParsedEvents by source + name + address (fingerprint).
+ * Batch lookup ParsedEvents by name + city_id (global fingerprint).
  */
 export async function lookupParsedEvents(items = []) {
   const list = Array.isArray(items) ? items : [];
@@ -13,22 +13,21 @@ export async function lookupParsedEvents(items = []) {
 
   for (const item of list) {
     const eventId = item.event_id || item.eventId || item.id || null;
-    const source = item.source || '';
     const name = item.name || '';
-    const address = item.address || '';
+    const cityId = item.city_id || item.cityId || '';
 
-    if (!source || !name || !address) {
+    if (!name || !cityId) {
       results.push({
         event_id: eventId,
         found: false,
-        reason: 'missing_source_name_address',
+        reason: 'missing_name_city',
       });
       continue;
     }
 
-    const fingerprint = eventFingerprint(source, name, address);
+    const fingerprint = eventFingerprint(name, cityId);
     // eslint-disable-next-line no-await-in-loop
-    const doc = await ParsedEventsSchema.findOne({ source, fingerprint }).lean();
+    const doc = await ParsedEventsSchema.findOne({ fingerprint }).lean();
     if (!doc?.event_data) {
       results.push({
         event_id: eventId,
@@ -43,6 +42,7 @@ export async function lookupParsedEvents(items = []) {
       event_id: eventId,
       found: true,
       fingerprint,
+      source: doc.source || e.source || null,
       description: e.description || '',
       holding_date: e.holding_date || '',
       date_start: e.date_start || null,
@@ -56,6 +56,7 @@ export async function lookupParsedEvents(items = []) {
       category_resolved_by: e.category_resolved_by || null,
       website: e.contacts?.website || '',
       ticketmaster_id: e.ticketmaster_id || null,
+      parser_unique_id: doc.parser_unique_id || e.parser_unique_id || null,
     });
   }
 

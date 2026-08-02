@@ -9,6 +9,7 @@ import { ENV, EVENT_SOURCE } from '../helpers/constants';
 import findCityInDb from '../helpers/cityMatching';
 import { findCountryByIso } from '../helpers/isoCountryAliases';
 import saveProcessedEvents from '../helpers/saveProcessedEvents';
+import { logParseRun } from '../helpers/logParseRun';
 import { createLoggerWithSource } from '../helpers/logger';
 import createCitySuggestionCollector from '../helpers/createCitySuggestionCollector';
 
@@ -326,8 +327,8 @@ async function discoverFeedBase(cookieJar) {
   return null;
 }
 
-async function parseIsraelinfo({ meta = {}, runId, operationId }) {
-  const parseRunId = runId || operationId;
+async function parseIsraelinfo({ meta = {}, runId }) {
+  const parseRunId = runId;
   const infoTexts = [];
   const errorTexts = [];
   const events = [];
@@ -335,10 +336,7 @@ async function parseIsraelinfo({ meta = {}, runId, operationId }) {
 
   const logProgress = async (msg) => {
     logger.info(msg);
-    const op = await ParseRunsSchema.findById(parseRunId);
-    await ParseRunsSchema.findByIdAndUpdate(parseRunId, {
-      infoText: `${op?.infoText || ''}\n${msg}`,
-    });
+    await logParseRun(parseRunId, `[${new Date().toISOString()}] ${msg}`);
   };
 
   try {
@@ -459,7 +457,6 @@ async function parseIsraelinfo({ meta = {}, runId, operationId }) {
         admin_id: meta.adminId || null,
         country_id: countryId ? String(countryId) : null,
         city_id: cityId ? String(cityId) : null,
-        operationId,
         contacts: { website: item.link || '' },
         photos: photo ? [{ full_url: photo }] : [],
         holding_date: holding,
@@ -491,6 +488,7 @@ async function parseIsraelinfo({ meta = {}, runId, operationId }) {
       `Mapped ${events.length} events (venues ok=${venueOk}, miss=${venueMiss}, fallback city only)`,
     );
   } catch (e) {
+    if (e?.cancelled) throw e;
     const errMsg = e?.message || 'Unknown error while parsing Israelinfo';
     errorTexts.push(errMsg);
     logger.error(errMsg, e);
@@ -520,6 +518,7 @@ async function parseIsraelinfo({ meta = {}, runId, operationId }) {
       extraStatistics: { citySuggestions: citySuggestionStats },
     });
   } catch (error) {
+    if (error?.cancelled) throw error;
     logger.error(`Error saving Israelinfo events: ${error.message || error}`);
   }
 }

@@ -168,6 +168,7 @@
     }
     .status.success { background: rgba(43,182,115,.18); color: #7ee0b0; }
     .status.error { background: rgba(226,92,92,.18); color: #ff9b9b; }
+    .status.cancelled { background: rgba(140,140,160,.2); color: #c8c8d8; }
     .status.processing, .status.pending { background: rgba(230,162,60,.18); color: #f0c878; }
     .err { color: var(--danger); white-space: pre-wrap; margin: 8px 0 0; }
     .empty { color: var(--muted); padding: 12px 0; }
@@ -458,6 +459,22 @@
       </div>
 
       <div id="tab-runs" class="hidden">
+        <div style="border:1px solid var(--border);border-radius:10px;padding:12px;margin-bottom:14px;background:var(--panel)">
+          <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;justify-content:space-between">
+            <div>
+              <strong>Cron и ручной запуск</strong>
+              <div class="muted" style="font-size:0.85rem;margin-top:2px">Каждый job — Run / ON / OFF · live-лог parse run</div>
+            </div>
+            <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+              <button id="cronStopBtn" class="danger secondary" type="button">Выкл все parsers</button>
+              <button id="cronStartBtn" class="ok secondary" type="button">Вкл все</button>
+              <button type="button" class="danger" id="parseStopActiveBtn" disabled>Стоп активный run</button>
+            </div>
+          </div>
+          <div id="cronJobsTable" style="margin-top:12px"></div>
+          <div class="muted mono" id="parseActiveLabel" style="margin-top:8px;font-size:0.82rem">Активный run: —</div>
+          <pre id="parseLiveLog" class="run-log" style="margin-top:8px;max-height:280px;overflow:auto">Лог появится после запуска…</pre>
+        </div>
         <div style="display:flex;gap:8px;margin-bottom:10px;flex-wrap:wrap;align-items:end">
           <div>
             <label>Статус run</label><br/>
@@ -467,11 +484,12 @@
               <option value="error">error</option>
               <option value="processing">processing</option>
               <option value="pending">pending</option>
+              <option value="cancelled">cancelled</option>
             </select>
           </div>
           <button id="reloadRuns" class="secondary" type="button">Обновить runs</button>
         </div>
-        <div class="muted" style="margin-bottom:8px;font-size:0.85rem">Кликни по строке — загрузится лог прогона (не realtime)</div>
+        <div class="muted" style="margin-bottom:8px;font-size:0.85rem">Кликни по строке — лог прогона. Активный run обновляется сам.</div>
         <div id="runsTable"></div>
         <div id="runDetail" class="run-detail hidden"></div>
       </div>
@@ -671,6 +689,10 @@
       catCandPage: 1,
       catCandPerPage: 50,
       catCandTotal: 0,
+      activeParseRunId: null,
+      parsePollTimer: null,
+      cronEnabled: null,
+      cronJobs: [],
     };
 
     function toast(msg, ok = true) {
@@ -1109,7 +1131,7 @@
     }
 
     function renderRunDetail(payload) {
-      const run = payload.run || payload.operation || {};
+      const run = payload.run || {};
       const id = String(run._id || state.selectedRunId || '');
       const st = parseStatsJson(run.statistics);
       const info = (run.infoText || '').trim() || 'Лог пуст';
@@ -1214,6 +1236,146 @@
       const data = await api(`/parsing/runs?${qs}`);
       state.runs = data.runs || [];
       renderRuns(state.runs);
+    }
+
+    function renderCronStatus(cron) {
+      state.cronEnabled = cron?.enabled !== false;
+      state.cronJobs = cron?.jobs || [];
+      const el = $('cronJobsTable');
+      if (!el) return;
+      if (!state.cronJobs.length) {
+        el.innerHTML = '<div class="empty">Нет cron jobs</div>';
+        return;
+      }
+      el.innerHTML = `
+        <table>
+          <thead>
+            <tr>
+              <th>Job</th><th>Schedule (UTC)</th><th>Kind</th><th>Status</th><th></th>
+            </tr>
+          </thead>
+          <tbody>
+            ${state.cronJobs.map((j) => `
+              <tr data-cron-id="${escapeHtml(j.id)}">
+                <td><strong>${escapeHtml(j.label)}</strong><div class="mono muted" style="font-size:0.75rem">${escapeHtml(j.id)}</div></td>
+                <td class="mono">${escapeHtml(j.expr)}</td>
+                <td>${escapeHtml(j.kind)}${j.source ? ` · ${escapeHtml(j.source)}` : ''}</td>
+                <td><span class="status ${j.enabled ? 'success' : 'cancelled'}">${j.enabled ? 'ON' : 'OFF'}</span></td>
+                <td style="white-space:nowrap">
+                  <button type="button" class="ok btn-cron-run" data-id="${escapeHtml(j.id)}">Run</button>
+                  <button type="button" class="secondary btn-cron-on" data-id="${escapeHtml(j.id)}" ${j.enabled ? 'disabled' : ''}>ON</button>
+                  <button type="button" class="danger btn-cron-off" data-id="${escapeHtml(j.id)}" ${j.enabled ? '' : 'disabled'}>OFF</button>
+                </td>
+              </tr>
+            `).join('')}
+          </tbody>
+        </table>`;
+    }
+
+    async function loadCronStatus() {
+      const data = await api('/parsing/cron');
+      renderCronStatus(data.cron);
+    }
+
+    async function runCronJobUi(jobId) {
+      saveCreds();
+      const data = await api(`/parsing/cron/${encodeURIComponent(jobId)}/run`, {
+        method: 'POST',
+        body: '{}',
+      });
+      const result = data.result || {};
+      if (result.runId) {
+        toast(`${jobId} → run ${result.runId}`);
+        startParsePoll(result.runId);
+        await loadRuns().catch(() => {});
+      } else if (result.stats) {
+        toast(`${jobId}: dict sync ok`);
+        $('parseLiveLog').textContent = JSON.stringify(result.stats, null, 2);
+      } else if (result.result) {
+        toast(`${jobId}: cleanup ok`);
+        $('parseLiveLog').textContent = JSON.stringify(result.result, null, 2);
+      } else {
+        toast(`${jobId}: ${JSON.stringify(result)}`);
+      }
+      if (data.cron) renderCronStatus(data.cron);
+    }
+
+    function stopParsePoll() {
+      if (state.parsePollTimer) {
+        clearInterval(state.parsePollTimer);
+        state.parsePollTimer = null;
+      }
+    }
+
+    function setActiveParseUi(runId, source, status) {
+      state.activeParseRunId = runId || null;
+      $('parseActiveLabel').textContent = runId
+        ? `Активный run: ${source || '—'} · ${status || '…'} · ${runId}`
+        : 'Активный run: —';
+      $('parseStopActiveBtn').disabled = !runId
+        || ['success', 'error', 'cancelled'].includes(status);
+    }
+
+    async function refreshActiveParseLog() {
+      if (!state.activeParseRunId) return;
+      try {
+        const data = await api(`/parsing/results/${encodeURIComponent(state.activeParseRunId)}`);
+        const run = data.run || {};
+        const info = (run.infoText || '').trim() || 'Лог пуст';
+        const err = (run.errorText || '').trim();
+        $('parseLiveLog').textContent = err ? `${info}\n\n--- ERROR ---\n${err}` : info;
+        $('parseLiveLog').scrollTop = $('parseLiveLog').scrollHeight;
+        setActiveParseUi(state.activeParseRunId, run.source, run.status);
+        if (['success', 'error', 'cancelled'].includes(run.status)) {
+          stopParsePoll();
+          loadRuns().catch(() => {});
+          toast(`Parse ${run.source}: ${run.status}`, run.status === 'success');
+        }
+      } catch (e) {
+        $('parseLiveLog').textContent = `Ошибка чтения лога: ${e.message || e}`;
+      }
+    }
+
+    function startParsePoll(runId) {
+      stopParsePoll();
+      state.activeParseRunId = runId;
+      setActiveParseUi(runId, '…', 'processing');
+      refreshActiveParseLog();
+      state.parsePollTimer = setInterval(() => {
+        refreshActiveParseLog().catch(() => {});
+      }, 2500);
+    }
+
+    async function startParseSource(source) {
+      saveCreds();
+      const data = await api('/parsing/create', {
+        method: 'POST',
+        body: JSON.stringify({
+          source,
+          meta: { specialization: 'Event' },
+        }),
+      });
+      toast(`${source} запущен`);
+      startParsePoll(data.runId);
+      await loadRuns().catch(() => {});
+      return data.runId;
+    }
+
+    async function startAllParsers() {
+      saveCreds();
+      const started = [];
+      const failed = [];
+      for (const source of SOURCES) {
+        try {
+          // eslint-disable-next-line no-await-in-loop
+          const id = await startParseSource(source);
+          started.push(`${source}:${id}`);
+        } catch (e) {
+          failed.push(`${source}: ${e.message || e}`);
+        }
+      }
+      if (started.length) toast(`Старт: ${started.length}. Лог — последний успешный.`);
+      if (failed.length) toast(failed.join(' | '), false);
     }
 
     function countryOptionsHtml(selected = '') {
@@ -1744,6 +1906,10 @@
       if (tab === 'backfill' && !state.backfillStats) {
         loadStats().catch((e) => showError(e.message || String(e)));
       }
+      if (tab === 'runs') {
+        loadCronStatus().catch(() => {});
+        loadRuns().catch((e) => showError(e.message || String(e)));
+      }
     }
 
     document.querySelectorAll('[data-preset]').forEach((btn) => {
@@ -1756,6 +1922,45 @@
     $('selectNone').onclick = () => document.querySelectorAll('#sources input').forEach((el) => { el.checked = false; });
     $('loadBtn').onclick = () => loadStats().catch((e) => showError(e.message || String(e)));
     $('reloadRuns').onclick = () => loadRuns().catch((e) => showError(e.message || String(e)));
+    $('parseStopActiveBtn').onclick = () => {
+      if (!state.activeParseRunId) return;
+      api(`/parsing/runs/${encodeURIComponent(state.activeParseRunId)}/stop`, {
+        method: 'POST',
+        body: '{}',
+      }).then(() => {
+        toast('Stop запрошен — дождётся следующей контрольной точки');
+        refreshActiveParseLog().catch(() => {});
+      }).catch((e) => toast(e.message || String(e), false));
+    };
+    $('cronStopBtn').onclick = () => api('/parsing/cron/stop', { method: 'POST', body: '{}' })
+      .then((data) => { renderCronStatus(data.cron); toast('Все parser/dict cron OFF (cleanup как был)'); })
+      .catch((e) => toast(e.message || String(e), false));
+    $('cronStartBtn').onclick = () => api('/parsing/cron/start', { method: 'POST', body: '{}' })
+      .then((data) => { renderCronStatus(data.cron); toast('Все cron ON'); })
+      .catch((e) => toast(e.message || String(e), false));
+    $('cronJobsTable').onclick = (ev) => {
+      const runBtn = ev.target.closest('.btn-cron-run');
+      const onBtn = ev.target.closest('.btn-cron-on');
+      const offBtn = ev.target.closest('.btn-cron-off');
+      if (runBtn) {
+        runBtn.disabled = true;
+        runCronJobUi(runBtn.dataset.id)
+          .catch((e) => toast(e.message || String(e), false))
+          .finally(() => { runBtn.disabled = false; });
+        return;
+      }
+      if (onBtn) {
+        api(`/parsing/cron/${encodeURIComponent(onBtn.dataset.id)}/enable`, { method: 'POST', body: '{}' })
+          .then((data) => { renderCronStatus(data.cron); toast(`${onBtn.dataset.id}: ON`); })
+          .catch((e) => toast(e.message || String(e), false));
+        return;
+      }
+      if (offBtn) {
+        api(`/parsing/cron/${encodeURIComponent(offBtn.dataset.id)}/disable`, { method: 'POST', body: '{}' })
+          .then((data) => { renderCronStatus(data.cron); toast(`${offBtn.dataset.id}: OFF`); })
+          .catch((e) => toast(e.message || String(e), false));
+      }
+    };
     $('bfCardsShowAll').onclick = () => {
       state.bfSelectedRunId = null;
       if (state.backfillStats) renderBackfill(state.backfillStats);

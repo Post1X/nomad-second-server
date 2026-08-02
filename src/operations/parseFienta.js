@@ -456,8 +456,8 @@ const parseEventPage = async (page, url) => {
   }
 };
 
-async function parseFienta({ meta = {}, runId, operationId }) {
-  const parseRunId = runId || operationId;
+async function parseFienta({ meta = {}, runId }) {
+  const parseRunId = runId;
   logger.info('\n========================================');
   logger.info('🚀 НАЧАЛО ПАРСИНГА FIENTA');
   logger.info('========================================');
@@ -777,6 +777,7 @@ async function parseFienta({ meta = {}, runId, operationId }) {
           }
 
         } catch (error) {
+          if (error?.cancelled) throw error;
           logger.error(`  ✗ Ошибка при обработке события ${card.href}: ${error.message}`);
           errorTexts.push(`Ошибка обработки ${card.href}: ${error.message}`);
         }
@@ -842,7 +843,6 @@ async function parseFienta({ meta = {}, runId, operationId }) {
           admin_id: adminId,
           country_id: city.country_id || countryId,
           city_id: city._id.toString(),
-          operationId: operationId,
           contacts: { website: link },
           photos: pageData.imageUrl ? [{ full_url: pageData.imageUrl }] : [],
           holding_date: formatHoldingDate([eventDate]),
@@ -860,6 +860,7 @@ async function parseFienta({ meta = {}, runId, operationId }) {
         allEvents.push(newEvent);
         logger.info(`  → Создано мероприятие: "${pageData.name}"`);
       } catch (error) {
+        if (error?.cancelled) throw error;
         logger.error(`  ✗ Ошибка при обработке ссылки ${link}: ${error.message}`);
         errorTexts.push(`Ошибка обработки типа 1 ${link}: ${error.message}`);
       }
@@ -935,7 +936,6 @@ async function parseFienta({ meta = {}, runId, operationId }) {
           admin_id: adminId,
           country_id: city.country_id || countryId,
           city_id: city._id.toString(),
-          operationId: operationId,
           contacts: { website: firstLink },
           photos: pageData.imageUrl ? [{ full_url: pageData.imageUrl }] : [],
           holding_date: formatHoldingDate(dates),
@@ -953,6 +953,7 @@ async function parseFienta({ meta = {}, runId, operationId }) {
         allEvents.push(newEvent);
         logger.info(`  → Создано мероприятие с ${dates.length} датами: "${pageData.name || group.original_title}"`);
       } catch (error) {
+        if (error?.cancelled) throw error;
         logger.error(`  ✗ Ошибка при обработке типа 2 ${group.original_url}: ${error.message}`);
         errorTexts.push(`Ошибка обработки типа 2 ${group.original_url}: ${error.message}`);
       }
@@ -1019,7 +1020,6 @@ async function parseFienta({ meta = {}, runId, operationId }) {
             admin_id: adminId,
             country_id: city.country_id || countryId,
             city_id: city._id.toString(),
-            operationId: operationId,
             contacts: { website: link },
             photos: pageData.imageUrl ? [{ full_url: pageData.imageUrl }] : [],
             holding_date: formatHoldingDate([eventDate]),
@@ -1037,6 +1037,7 @@ async function parseFienta({ meta = {}, runId, operationId }) {
           allEvents.push(newEvent);
           logger.info(`    → Создано мероприятие: "${pageData.name}"`);
         } catch (error) {
+          if (error?.cancelled) throw error;
           logger.error(`    ✗ Ошибка при обработке ссылки ${link}: ${error.message}`);
           errorTexts.push(`Ошибка обработки типа 3 ${link}: ${error.message}`);
         }
@@ -1084,6 +1085,7 @@ async function parseFienta({ meta = {}, runId, operationId }) {
         infoLines.push(`Создано и сохранено мероприятий: ${processed.length} (raw ${allEvents.length})`);
         await logProgress(parseRunId, `Successfully saved ${processed.length} events`);
       } catch (saveError) {
+        if (saveError?.cancelled) throw saveError;
         const saveErrMsg = `Error saving events: ${saveError.message}`;
         errorTexts.push(saveErrMsg);
         logger.error(saveErrMsg);
@@ -1118,6 +1120,7 @@ async function parseFienta({ meta = {}, runId, operationId }) {
     await logProgress(parseRunId, `Page ${page._id} processed successfully`);
 
   } catch (e) {
+    if (e?.cancelled) throw e;
     const errorMsg = e?.message || String(e);
     errorTexts.push(errorMsg);
     logger.error(`Error processing page ${page._id}: ${errorMsg}`);

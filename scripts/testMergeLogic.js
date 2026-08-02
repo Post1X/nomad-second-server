@@ -3,7 +3,7 @@
  * Dedicated merge-logic test (second server).
  *
  * Covers:
- *  - fingerprint by source+name+address
+ *  - fingerprint by name+city_id (global, cross-source)
  *  - in-batch merge (dates / prices / longest description)
  *  - upsert stages: insert | skip | merge_dates_prices | update_fields
  *  - DB persistence via ParsedEvents (2 dates → 1 doc)
@@ -51,17 +51,18 @@ async function main() {
   await mongoose.connect(`mongodb://localhost:27017/${dbName}`);
 
   console.log('\n=== 1. Fingerprint ===');
-  const a = eventFingerprint('eventim', 'Same Show', 'Hall A');
-  const b = eventFingerprint('eventim', 'Same Show', 'Hall A');
-  const c = eventFingerprint('fienta', 'Same Show', 'Hall A');
-  const d = eventFingerprint('eventim', 'Same Show', 'Hall B');
-  if (a === b && a !== c && a !== d) ok('fingerprint stable & unique by source/address');
+  const a = eventFingerprint('Same Show', 'cityA');
+  const b = eventFingerprint('Same Show', 'cityA');
+  const c = eventFingerprint('Same Show', 'cityA'); // other source would share fp
+  const d = eventFingerprint('Same Show', 'cityB');
+  if (a === b && a === c && a !== d) ok('fingerprint global by name+city (cross-source same)');
   else fail('fingerprint', `${a.slice(0, 8)}…`);
 
   console.log('\n=== 2. In-batch merge (dates/prices/desc) ===');
   const batch = mergeDuplicateEventsForSource([
     {
       name: 'Merge Concert',
+      city_id: 'cityBerlin',
       address: 'Berlin Arena',
       date_start: new Date('2026-09-01T20:00:00Z'),
       min_price: 40,
@@ -71,7 +72,8 @@ async function main() {
     },
     {
       name: 'Merge Concert',
-      address: 'Berlin Arena',
+      city_id: 'cityBerlin',
+      address: 'Another spelling of venue',
       date_start: new Date('2026-09-03T20:00:00Z'),
       min_price: 55,
       max_price: 90,
@@ -80,6 +82,7 @@ async function main() {
     },
     {
       name: 'Other Show',
+      city_id: 'cityBerlin',
       address: 'Berlin Arena',
       date_start: new Date('2026-09-05T20:00:00Z'),
       min_price: 10,
@@ -88,7 +91,7 @@ async function main() {
     },
   ], 'kontramarka');
 
-  if (batch.length === 2) ok('batch collapses same name+address', `groups=${batch.length}`);
+  if (batch.length === 2) ok('batch collapses same name+city', `groups=${batch.length}`);
   else fail('batch collapse', `got ${batch.length}`);
 
   const concert = batch.find((e) => e.name === 'Merge Concert');
@@ -150,10 +153,15 @@ async function main() {
   }) === 'update_fields') ok('stage update_fields');
   else fail('stage update_fields');
 
-  // different address → new insert (not merge)
-  if (classifyMatchStage(base, { ...base, address: 'Salzburg' }) === 'insert') {
-    ok('different address → insert (no merge)');
-  } else fail('different address → insert');
+  // different address, same city → still same event (update_fields if address in FULL_MATCH)
+  const addrStage = classifyMatchStage(base, { ...base, address: 'Salzburg' });
+  if (addrStage === 'update_fields' || addrStage === 'skip') {
+    ok('different address same city → merge path', addrStage);
+  } else fail('different address same city', addrStage);
+
+  if (classifyMatchStage(base, { ...base, city_id: 'city2' }) === 'insert') {
+    ok('different city → insert (no merge)');
+  } else fail('different city → insert');
 
   const { event: merged, changed } = applyMergeToExisting(base, {
     ...base,
@@ -174,6 +182,7 @@ async function main() {
     const m = mergeDuplicateEventsForSource([
       {
         name: 'Src Show',
+        city_id: 'c1',
         address: 'Addr 1',
         date_start: new Date('2026-11-01'),
         min_price: 5,
@@ -182,7 +191,8 @@ async function main() {
       },
       {
         name: 'Src Show',
-        address: 'Addr 1',
+        city_id: 'c1',
+        address: 'Addr DIFFERENT',
         date_start: new Date('2026-11-02'),
         min_price: 8,
         max_price: 12,
@@ -196,14 +206,16 @@ async function main() {
   console.log('\n=== 5. DB persistence (ParsedEvents upsert merge) ===');
   const stamp = Date.now();
   const name = `__merge_test_${stamp}`;
+  const cityId = 'mergeTestCity';
   const address = 'Merge Test Hall';
   const source = 'eventim';
-  const fp = eventFingerprint(source, name, address);
+  const fp = eventFingerprint(name, cityId);
 
   await ParsedEventsSchema.deleteMany({ fingerprint: fp, source });
 
   const day1 = {
     name,
+    city_id: cityId,
     address,
     description: 'day1',
     date_start: new Date('2026-12-01T19:00:00Z'),
@@ -216,7 +228,8 @@ async function main() {
   };
   const day2 = {
     name,
-    address,
+    city_id: cityId,
+    address: 'Other Hall Spelling',
     description: 'day2 longer description for merge test',
     date_start: new Date('2026-12-10T19:00:00Z'),
     date_end: new Date('2026-12-10T19:00:00Z'),
@@ -302,7 +315,50 @@ async function main() {
     fail('parser_unique_id missing on saved event_data');
   }
   ok('contract: is_hidden deprecated on MAIN; pull publishes without hiding');
-  ok('contract: cross-source merge + create/update by parser_unique_id on MAIN pull');
+  ok('contract: cross-source merge on SECOND; MAIN upsert by parser_unique_id');
+
+
+  console.log('\n=== 7. Cross-source fingerprint + priority merge helper ===');
+  {
+    const { mergeCrossSourceEvent, pickWinnerSource } = await import('../src/helpers/merge/index.js');
+    if (pickWinnerSource('fienta', 'eventim') === 'incoming') ok('priority: eventim beats fienta');
+    else fail('priority eventim>fienta');
+    if (pickWinnerSource('eventim', 'fienta') === 'existing') ok('priority: keep eventim over fienta');
+    else fail('priority keep eventim');
+
+    const existing = {
+      name: 'Cross Show',
+      city_id: 'cityX',
+      address: 'Hall A',
+      description: 'short',
+      date_start: new Date('2026-08-01'),
+      date_end: new Date('2026-08-01'),
+      holding_date: '01.08.2026',
+      min_price: 10,
+      max_price: 10,
+      parser_unique_id: 'puid-cross-1',
+    };
+    const incoming = {
+      name: 'Cross Show',
+      city_id: 'cityX',
+      address: 'Hall B spelling',
+      description: 'much longer from eventim',
+      date_start: new Date('2026-08-05'),
+      date_end: new Date('2026-08-05'),
+      holding_date: '05.08.2026',
+      min_price: 20,
+      max_price: 40,
+    };
+    const { event: merged, winnerSource } = mergeCrossSourceEvent(existing, 'fienta', incoming, 'eventim');
+    if (winnerSource === 'eventim'
+      && merged.parser_unique_id === 'puid-cross-1'
+      && String(merged.description).includes('longer')
+      && Number(merged.max_price) === 40) {
+      ok('cross-source merge keeps puid, winner fields, union prices');
+    } else {
+      fail('cross-source merge', JSON.stringify({ winnerSource, desc: merged.description, max: merged.max_price, puid: merged.parser_unique_id }));
+    }
+  }
 
   console.log(`\n=== RESULT: ${passed} passed, ${failed} failed ===`);
   await mongoose.disconnect();
