@@ -9,6 +9,7 @@ import { createLoggerWithSource } from '../helpers/logger';
 import saveProcessedEvents from '../helpers/saveProcessedEvents';
 import logParseRun from '../helpers/logParseRun';
 import createCitySuggestionCollector from '../helpers/createCitySuggestionCollector';
+import findCityInDb from '../helpers/cityMatching';
 
 const logger = createLoggerWithSource('PARSE_FIENTA');
 
@@ -123,23 +124,6 @@ const formatHoldingDate = (dateArray) => {
   return result;
 };
 
-const normalize = (str = '') => str
-  .toString()
-  .toLowerCase()
-  .normalize('NFD')
-  .replace(/[\u0300-\u036f]/g, '')
-  .replace(/\s+/g, ' ')
-  .trim();
-
-const cityTokens = (name = '') => name.split('|').map((s) => normalize(s)).filter(Boolean);
-
-/** Проверяет, что token встречается в text целиком (token может быть из нескольких слов, напр. "new york"). Границы — явные разделители, не \\b, чтобы кириллица не матчилась по подстроке (Бар в Барселона). */
-const containsWholeWord = (text, token) => {
-  if (!text || !token) return false;
-  const escaped = token.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  return new RegExp(`(^|[\\s,.\\-•;])${escaped}([\\s,.\\-•;]|$)`, 'i').test(text);
-};
-
 /** Очищает адрес от переносов строк и множественных пробелов */
 const cleanAddress = (address) => {
   if (!address || typeof address !== 'string') return '';
@@ -149,71 +133,24 @@ const cleanAddress = (address) => {
     .trim();
 };
 
+/**
+ * Resolve city from Fienta location string (often full address).
+ * Prefer last address parts so venue names like "Tokyo Comedy Bar" don't steal the match;
+ * matching itself goes through findCityInDb (aliases + pipe names).
+ */
 const findCity = (cities, targetName = '') => {
-  const target = normalize(targetName);
-  if (!target) return null;
+  const raw = String(targetName || '').trim();
+  if (!raw) return null;
 
-  // Разбиваем адрес по запятым и точкам (город обычно в последних частях)
-  const parts = target.split(/[,•]/).map(p => p.trim()).filter(p => p.length > 0);
+  const direct = findCityInDb(cities, raw);
+  if (direct) return direct;
 
-  // Проверяем только последние 3 части адреса (город обычно там)
-  // Это предотвращает случайное определение города из названия заведения (например, "Bar" из "Tokyo Comedy Bar")
+  const parts = raw.split(/[,•|]/).map((p) => p.trim()).filter(Boolean);
   const partsToCheck = parts.slice(-3);
-
-  for (let partIdx = partsToCheck.length - 1; partIdx >= 0; partIdx--) {
-    const part = partsToCheck[partIdx];
-    const words = part.split(/\s+/).filter(w => w.length > 2);
-
-    // Проверяем слова справа налево в этой части
-    for (let wordIdx = words.length - 1; wordIdx >= 0; wordIdx--) {
-      const word = words[wordIdx];
-
-      // Пробуем найти совпадение только по целым словам (чтобы "Бар" не матчился с "Барселона")
-      for (let i = 0; i < cities.length; i++) {
-        const c = cities[i];
-        const tokens = cityTokens(c.name);
-        for (let j = 0; j < tokens.length; j++) {
-          const tok = tokens[j];
-          // Точное совпадение слова
-          if (word === tok) {
-            return c;
-          }
-          // Токен города должен встречаться в части адреса как отдельное слово целиком
-          if (containsWholeWord(part, tok)) {
-            return c;
-          }
-        }
-      }
-
-      // Пробуем совпадение с несколькими словами подряд (для составных названий типа "Old Tbilisi", "Shibuya City")
-      if (wordIdx > 0) {
-        const twoWords = `${words[wordIdx - 1]} ${words[wordIdx]}`;
-        for (let i = 0; i < cities.length; i++) {
-          const c = cities[i];
-          const tokens = cityTokens(c.name);
-          for (let j = 0; j < tokens.length; j++) {
-            const tok = tokens[j];
-            if (containsWholeWord(part, tok) || (tok === twoWords) || containsWholeWord(tok, twoWords)) {
-              return c;
-            }
-          }
-        }
-      }
-    }
-
-    // Проверяем всю часть: название города должно встречаться целиком как слово
-    for (let i = 0; i < cities.length; i++) {
-      const c = cities[i];
-      const tokens = cityTokens(c.name);
-      for (let j = 0; j < tokens.length; j++) {
-        const tok = tokens[j];
-        if (containsWholeWord(part, tok)) {
-          return c;
-        }
-      }
-    }
+  for (let i = partsToCheck.length - 1; i >= 0; i -= 1) {
+    const match = findCityInDb(cities, partsToCheck[i]);
+    if (match) return match;
   }
-
   return null;
 };
 

@@ -14,6 +14,7 @@ import { createLoggerWithSource } from '../helpers/logger';
 import saveProcessedEvents from '../helpers/saveProcessedEvents';
 import logParseRun from '../helpers/logParseRun';
 import createCitySuggestionCollector from '../helpers/createCitySuggestionCollector';
+import findCityInDb from '../helpers/cityMatching';
 
 const logger = createLoggerWithSource('PARSE_EVENTIM');
 
@@ -23,32 +24,6 @@ moment.locale('ru');
 
 const citiesCache = {
   list: null,
-};
-
-const normalize = (str = '') => str
-  .toString()
-  .toLowerCase()
-  .normalize('NFD')
-  .replace(/[\u0300-\u036f]/g, '')
-  .replace(/\s+/g, ' ')
-  .trim();
-
-const cityTokens = (name = '') => name.split('|').map((s) => normalize(s)).filter(Boolean);
-
-/** Проверяет, что token встречается в text целиком (token может быть из нескольких слов, напр. "new york"). Границы — явные разделители, не \\b, чтобы кириллица не матчилась по подстроке (Бар в Барселона). */
-const containsWholeWord = (text, token) => {
-  if (!text || !token) return false;
-  const escaped = token.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  return new RegExp(`(^|[\\s,.\\-•;])${escaped}([\\s,.\\-•;]|$)`, 'i').test(text);
-};
-
-const findCity = (cities, targetName = '') => {
-  const target = normalize(targetName);
-  if (!target) return null;
-  return cities.find((c) => {
-    const tokens = cityTokens(c.name);
-    return tokens.some((tok) => containsWholeWord(target, tok));
-  }) || null;
 };
 
 const parseCoordinatesField = (coord) => {
@@ -416,7 +391,7 @@ async function parseEventim({ meta = {}, runId }) {
         const address = addressParts.join(', ');
 
         const targetCity = event.eventCity || metaCityName || '';
-        const matchedCity = findCity(cities, targetCity);
+        const matchedCity = findCityInDb(cities, targetCity);
         const fallbackCoords = parseCoordinatesField(matchedCity?.coordinates);
         const resolvedCityId = cityId || matchedCity?._id || null;
         const resolvedCountryId = countryId || matchedCity?.country_id || null;
