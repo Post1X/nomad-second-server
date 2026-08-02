@@ -9,6 +9,7 @@ import CleanupServices from '../services/CleanupServices';
 import StatsServices from '../services/StatsServices';
 import BackfillStatsServices from '../services/BackfillStatsServices';
 import CityDiscoveryServices from '../services/CityDiscoveryServices';
+import CategorySuggestionServices from '../services/CategorySuggestionServices';
 import { categorizeBatch } from '../services/CategorizeBatchServices';
 import { lookupParsedEvents } from '../services/LookupParsedEventsServices';
 import { enrichFromTicketmaster } from '../services/EnrichTicketmasterServices';
@@ -743,6 +744,61 @@ class ParsingController {
     try {
       const doc = await CityDiscoveryServices.reject(req.params.id, req.body?.reason || '');
       res.json({ status: 'ok', suggestion: doc });
+    } catch (error) {
+      if (error.status) {
+        return res.status(error.status).json({ status: 'error', message: error.message });
+      }
+      next(error);
+    }
+  };
+
+  static listCategorySuggestions = async (req, res, next) => {
+    try {
+      const page = Math.max(1, parseInt(String(req.query.page || 1), 10) || 1);
+      const per_page = Math.max(1, Math.min(200, parseInt(String(req.query.per_page || 50), 10) || 50));
+      const result = await CategorySuggestionServices.listCategorySuggestions({
+        status: req.query.status || 'pending',
+        page,
+        per_page,
+        q: req.query.q || '',
+      });
+      res.json({ status: 'ok', ...result });
+    } catch (error) {
+      next(error);
+    }
+  };
+
+  static categorySuggestionsMetrics = async (req, res, next) => {
+    try {
+      const metrics = await CategorySuggestionServices.categorySuggestionsMetrics();
+      res.json({ status: 'ok', metrics });
+    } catch (error) {
+      next(error);
+    }
+  };
+
+  static approveCategorySuggestion = async (req, res, next) => {
+    try {
+      const result = await CategorySuggestionServices.approveCategorySuggestion(
+        req.params.id,
+        req.body || {},
+      );
+      res.json({ status: 'ok', ...result });
+    } catch (error) {
+      if (error.status) {
+        return res.status(error.status).json({ status: 'error', message: error.message });
+      }
+      next(error);
+    }
+  };
+
+  static rejectCategorySuggestion = async (req, res, next) => {
+    try {
+      const result = await CategorySuggestionServices.rejectCategorySuggestion(
+        req.params.id,
+        req.body?.reason || '',
+      );
+      res.json({ status: 'ok', ...result });
     } catch (error) {
       if (error.status) {
         return res.status(error.status).json({ status: 'error', message: error.message });

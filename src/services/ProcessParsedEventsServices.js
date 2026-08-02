@@ -53,18 +53,30 @@ export async function processParsedEvents(rawEvents, source) {
         name: ev.name,
         description: ev.description,
         address: ev.address,
+        source,
         index: i,
       });
     }
   }
 
   let openaiUsage = null;
+  let categorySuggestions = null;
+  let tokensBySuggestion = [];
   if (needsAi.length) {
-    const { map: aiMap, usage } = await categorizeEventsWithAi(needsAi);
+    const {
+      map: aiMap,
+      suggestions: aiSuggestions,
+      usage,
+      suggestionUpsert,
+      tokensBySuggestion: tokenShares,
+    } = await categorizeEventsWithAi(needsAi);
     openaiUsage = usage;
+    categorySuggestions = suggestionUpsert;
+    tokensBySuggestion = tokenShares || [];
     const otherId = await getOtherCategoryId();
     for (const item of needsAi) {
       const catId = aiMap.get(item.tempId);
+      const suggested = aiSuggestions?.get(item.tempId) || null;
       const ev = merged[item.index];
       if (catId) {
         ev.events_category_id = catId;
@@ -74,11 +86,13 @@ export async function processParsedEvents(rawEvents, source) {
         ev.events_category_id = otherId;
         ev.category_resolved_by = 'default_other';
         ev.category_ai_failed = true;
+        if (suggested) ev.category_suggested_name = suggested;
         noCategoryAfterAi += 1;
       } else {
         ev.events_category_id = null;
         ev.category_resolved_by = 'default_other';
         ev.category_ai_failed = true;
+        if (suggested) ev.category_suggested_name = suggested;
         noCategoryAfterAi += 1;
       }
       delete ev._tempId;
@@ -94,6 +108,8 @@ export async function processParsedEvents(rawEvents, source) {
     noCategoryAfterAi,
     noCity,
     openaiUsage,
+    categorySuggestions,
+    tokensBySuggestion,
   };
 
   logger.info(`Process stats (${source}): ${JSON.stringify(stats)}`);

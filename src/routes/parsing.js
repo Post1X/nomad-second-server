@@ -34,4 +34,9 @@ router.get('/cities/suggestions/metrics', ParsingController.citySuggestionsMetri
 router.post('/cities/suggestions/:id/approve', ParsingController.approveCitySuggestion);
 router.post('/cities/suggestions/:id/reject', ParsingController.rejectCitySuggestion);
 
+router.get('/categories/suggestions', ParsingController.listCategorySuggestions);
+router.get('/categories/suggestions/metrics', ParsingController.categorySuggestionsMetrics);
+router.post('/categories/suggestions/:id/approve', ParsingController.approveCategorySuggestion);
+router.post('/categories/suggestions/:id/reject', ParsingController.rejectCategorySuggestion);
+
 export default router;

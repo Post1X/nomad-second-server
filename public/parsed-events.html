@@ -242,8 +242,28 @@
       gap: 4px 10px;
       margin: 0;
     }
-    .detail dt { color: var(--muted); }
-    .detail dd { margin: 0; word-break: break-all; font-family: var(--mono); font-size: 0.78rem; }
+    .detail dt { color: var(--muted); font-family: var(--mono); font-size: 0.75rem; }
+    .detail dd { margin: 0; word-break: break-word; font-family: var(--mono); font-size: 0.78rem; color: var(--text); }
+    .detail .all-fields {
+      display: grid;
+      grid-template-columns: minmax(120px, 180px) 1fr;
+      gap: 6px 12px;
+      margin: 0;
+    }
+    .detail .all-fields dt { padding-top: 2px; }
+    .detail .json-block {
+      white-space: pre-wrap;
+      word-break: break-word;
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 8px 10px;
+      max-height: 280px;
+      overflow: auto;
+      font-size: 0.74rem;
+      line-height: 1.35;
+    }
+    .detail a { color: var(--accent); }
     .pager {
       display: flex;
       flex-wrap: wrap;
@@ -399,6 +419,44 @@
       return ev.image_url || ev.image || ev.photo_url || (Array.isArray(ev.photos) && ev.photos[0]?.full_url) || '';
     }
 
+    function websiteUrl(ev) {
+      return ev.contacts?.website || ev.website || ev.url || ev.link || '';
+    }
+
+    function formatFieldValue(value) {
+      if (value === null || value === undefined || value === '') return '—';
+      if (typeof value === 'boolean') return value ? 'true' : 'false';
+      if (typeof value === 'number') return String(value);
+      if (typeof value === 'string') {
+        if (/^https?:\/\//i.test(value)) {
+          return `<a href="${escapeHtml(value)}" target="_blank" rel="noopener noreferrer">${escapeHtml(value)}</a>`;
+        }
+        return escapeHtml(value);
+      }
+      if (value instanceof Date || (typeof value === 'string' && /^\d{4}-\d{2}-\d{2}T/.test(value))) {
+        return escapeHtml(String(value));
+      }
+      try {
+        return `<pre class="json-block">${escapeHtml(JSON.stringify(value, null, 2))}</pre>`;
+      } catch (e) {
+        return escapeHtml(String(value));
+      }
+    }
+
+    /** All keys present on the event payload — nothing hidden. */
+    function renderAllFields(ev) {
+      const keys = Object.keys(ev || {}).sort((a, b) => a.localeCompare(b));
+      if (!keys.length) return '<div class="empty">Нет полей</div>';
+      return `
+        <dl class="all-fields">
+          ${keys.map((key) => `
+            <dt>${escapeHtml(key)}</dt>
+            <dd>${formatFieldValue(ev[key])}</dd>
+          `).join('')}
+        </dl>
+      `;
+    }
+
     function renderSources() {
       const wrap = $('sources');
       const allCnt = Object.values(state.countsBySource).reduce((a, b) => a + b, 0);
@@ -433,8 +491,10 @@
       grid.innerHTML = events.map((ev, idx) => {
         const src = ev.source || '—';
         const img = imageUrl(ev);
+        const site = websiteUrl(ev);
         const exported = !!ev.exported_at;
         const desc = (ev.description || '').trim();
+        const cat = ev.events_category_id || ev.category_id || ev.category || '';
         const thumb = img
           ? `<img class="thumb" src="${escapeHtml(img)}" alt="" loading="lazy" onerror="this.replaceWith(Object.assign(document.createElement('div'),{className:'thumb placeholder',textContent:'no img'}))" />`
           : `<div class="thumb placeholder">no img</div>`;
@@ -448,34 +508,32 @@
                   <span class="badge src-${escapeHtml(src)}">${escapeHtml(src)}</span>
                   <span class="badge ${exported ? 'ok' : 'warn'}">${exported ? 'exported' : 'pending'}</span>
                   ${ev.specialization ? `<span class="badge">${escapeHtml(ev.specialization)}</span>` : ''}
+                  ${cat ? `<span class="badge">${escapeHtml(String(cat))}</span>` : ''}
+                  ${ev.category_resolved_by ? `<span class="badge">${escapeHtml(ev.category_resolved_by)}</span>` : ''}
                 </div>
                 <div class="lines">
                   <span><b>${escapeHtml(ev.holding_date || '—')}</b></span>
                   <span>${escapeHtml(ev.address || '—')}</span>
                   <span>цена: <b>${escapeHtml(priceLabel(ev))}</b></span>
+                  ${ev.city_id ? `<span>city_id: <b>${escapeHtml(String(ev.city_id))}</b></span>` : ''}
+                  ${ev.country_id ? `<span>country_id: <b>${escapeHtml(String(ev.country_id))}</b></span>` : ''}
+                  ${(ev.lat != null && ev.lon != null) ? `<span>coords: <b>${escapeHtml(`${ev.lat}, ${ev.lon}`)}</b></span>` : ''}
+                  ${site ? `<span><a href="${escapeHtml(site)}" target="_blank" rel="noopener noreferrer" onclick="event.stopPropagation()">website</a></span>` : ''}
                 </div>
               </div>
             </div>
             ${desc ? `<p class="desc-preview">${escapeHtml(desc)}</p>` : ''}
             <div class="detail">
-              <p>${escapeHtml(desc || 'Описание отсутствует')}</p>
-              <dl>
-                <dt>date_start</dt><dd>${escapeHtml(ev.date_start || '—')}</dd>
-                <dt>date_end</dt><dd>${escapeHtml(ev.date_end || '—')}</dd>
-                <dt>parser_uid</dt><dd>${escapeHtml(ev.parser_unique_id || '—')}</dd>
-                <dt>fingerprint</dt><dd>${escapeHtml(ev.fingerprint || '—')}</dd>
-                <dt>parsed_id</dt><dd>${escapeHtml(ev._parsed_event_id || '—')}</dd>
-                <dt>category</dt><dd>${escapeHtml(ev.category_id || ev.category || '—')}</dd>
-                <dt>resolved_by</dt><dd>${escapeHtml(ev.category_resolved_by || '—')}</dd>
-                <dt>updatedAt</dt><dd>${escapeHtml(ev.updatedAt || '—')}</dd>
-              </dl>
+              <h3 style="margin:0 0 10px;font-size:0.85rem;color:var(--muted)">Все поля (${Object.keys(ev).length})</h3>
+              ${renderAllFields(ev)}
             </div>
           </article>
         `;
       }).join('');
 
       grid.querySelectorAll('.card').forEach((card) => {
-        card.addEventListener('click', () => {
+        card.addEventListener('click', (e) => {
+          if (e.target.closest('a')) return;
           card.classList.toggle('open');
         });
       });

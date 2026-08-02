@@ -409,6 +409,7 @@
         <button type="button" data-tab="runs">ParseRuns</button>
         <button type="button" data-tab="backfill">Backfill</button>
         <button type="button" data-tab="cities">Города-кандидаты</button>
+        <button type="button" data-tab="catcands">Категории кандидаты</button>
       </div>
 
       <div id="tab-overview">
@@ -579,6 +580,33 @@
         <div class="muted mono" id="cityListMeta" style="margin-bottom:8px">—</div>
         <div id="citySuggestionsTable"></div>
       </div>
+
+      <div id="tab-catcands" class="hidden">
+        <div class="muted" style="margin-bottom:12px;font-size:0.88rem">
+          AI предлагает только отсутствующие в БД обобщённые категории.
+          Approve создаёт EventsCategory на <b>main + second</b> одной кнопкой.
+        </div>
+        <div class="cards" id="catCandMetricCards"></div>
+        <div style="display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap;align-items:end">
+          <div>
+            <label>Статус</label><br/>
+            <select id="catCandStatus">
+              <option value="pending">pending</option>
+              <option value="rejected">rejected</option>
+            </select>
+          </div>
+          <div style="min-width:180px;flex:1">
+            <label>Поиск</label><br/>
+            <input id="catCandQ" placeholder="часть названия…" />
+          </div>
+          <button id="catCandReloadBtn" class="secondary" type="button">Обновить</button>
+          <button id="catCandPrev" class="secondary" type="button">←</button>
+          <span class="mono" id="catCandPageLabel">1</span>
+          <button id="catCandNext" class="secondary" type="button">→</button>
+        </div>
+        <div class="muted mono" id="catCandListMeta" style="margin-bottom:8px">—</div>
+        <div id="catCandTable"></div>
+      </div>
     </section>
   </main>
   <div class="toast" id="toast"></div>
@@ -586,7 +614,7 @@
   <script>
     const SOURCES = ['kontramarka', 'fienta', 'eventim', 'ticketmaster', 'israelinfo'];
     const $ = (id) => document.getElementById(id);
-    const TABS = ['overview', 'sources', 'geo', 'cats', 'runs', 'backfill', 'cities'];
+    const TABS = ['overview', 'sources', 'geo', 'cats', 'runs', 'backfill', 'cities', 'catcands'];
 
     const state = {
       stats: null,
@@ -600,6 +628,9 @@
       cityTotal: 0,
       cityItems: [],
       cityMetrics: null,
+      catCandPage: 1,
+      catCandPerPage: 50,
+      catCandTotal: 0,
     };
 
     function toast(msg, ok = true) {
@@ -1308,6 +1339,107 @@
       await loadCitySuggestions();
     }
 
+    function renderCatCandMetrics(m) {
+      $('catCandMetricCards').innerHTML = `
+        <div class="card"><div class="k">Pending</div><div class="v">${m.pending || 0}</div></div>
+        <div class="card"><div class="k">Rejected</div><div class="v">${m.rejected || 0}</div></div>
+        <div class="card"><div class="k">Top hits</div><div class="v" style="font-size:0.95rem;line-height:1.35">${
+          (m.top || []).slice(0, 3).map((t) => `${escapeHtml(t.raw_name)} (${t.hit_count})`).join('<br/>') || '—'
+        }</div></div>
+      `;
+    }
+
+    function renderCatCandTable(items) {
+      const canApprove = ($('catCandStatus').value || 'pending') === 'pending';
+      $('catCandTable').innerHTML = `
+        <table>
+          <thead>
+            <tr>
+              <th>Кандидат</th>
+              <th>Hits</th>
+              <th>Tokens (≈)</th>
+              <th>Примеры / sources</th>
+              <th>Действия</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${(items || []).map((item) => {
+              const examples = (item.example_events || []).slice(0, 3)
+                .map((e) => `<div class="muted">${escapeHtml(e)}</div>`).join('');
+              const sources = (item.sources || []).join(', ') || '—';
+              const rejected = item.status === 'rejected'
+                ? `<div class="muted">reject: ${escapeHtml(item.reject_reason || '—')}</div>`
+                : '';
+              return `<tr data-catcand-id="${escapeHtml(item._id)}">
+                <td>
+                  <input class="f-cat-name" value="${escapeHtml(item.raw_name)}" ${canApprove ? '' : 'disabled'} style="width:100%" />
+                  ${rejected}
+                </td>
+                <td class="mono">${item.hit_count || 1}</td>
+                <td class="mono">${Math.round(item.tokens_total || 0)}</td>
+                <td>
+                  <div class="muted mono">${escapeHtml(sources)}</div>
+                  ${examples}
+                </td>
+                <td>
+                  <button type="button" class="ok btn-catcand-approve" ${canApprove ? '' : 'disabled'}>Approve</button>
+                  <button type="button" class="danger btn-catcand-reject" ${canApprove ? '' : 'disabled'}>Reject</button>
+                </td>
+              </tr>`;
+            }).join('') || '<tr><td colspan="5" class="muted">Нет кандидатов</td></tr>'}
+          </tbody>
+        </table>`;
+    }
+
+    async function loadCatCandMetrics() {
+      const data = await api('/parsing/categories/suggestions/metrics');
+      renderCatCandMetrics(data.metrics || {});
+    }
+
+    async function loadCatCandSuggestions() {
+      const qs = new URLSearchParams({
+        page: String(state.catCandPage),
+        per_page: String(state.catCandPerPage),
+        status: $('catCandStatus').value || 'pending',
+      });
+      const q = $('catCandQ').value.trim();
+      if (q) qs.set('q', q);
+      const data = await api(`/parsing/categories/suggestions?${qs}`);
+      state.catCandTotal = data.total || 0;
+      $('catCandListMeta').textContent = `всего: ${state.catCandTotal} · page ${data.page} · per_page ${data.per_page}`;
+      $('catCandPageLabel').textContent = String(data.page || state.catCandPage);
+      renderCatCandTable(data.items || []);
+    }
+
+    async function loadCatCandsTab() {
+      showError('');
+      saveCreds();
+      await loadCatCandMetrics();
+      await loadCatCandSuggestions();
+    }
+
+    async function approveCatCandRow(tr) {
+      const id = tr.dataset.catcandId;
+      const name = tr.querySelector('.f-cat-name').value.trim();
+      if (!name) throw new Error('name is required');
+      const data = await api(`/parsing/categories/suggestions/${encodeURIComponent(id)}/approve`, {
+        method: 'POST',
+        body: JSON.stringify({ name }),
+      });
+      toast(`Категория main+second: ${data.category?.name} (${data.category?._id})`);
+      await loadCatCandsTab();
+    }
+
+    async function rejectCatCandRow(tr) {
+      const id = tr.dataset.catcandId;
+      await api(`/parsing/categories/suggestions/${encodeURIComponent(id)}/reject`, {
+        method: 'POST',
+        body: JSON.stringify({ reason: 'manual' }),
+      });
+      toast('Rejected');
+      await loadCatCandsTab();
+    }
+
     function switchTab(tab) {
       document.querySelectorAll('[data-tab]').forEach((b) => b.classList.toggle('active', b.dataset.tab === tab));
       TABS.forEach((t) => {
@@ -1316,6 +1448,12 @@
       });
       if (tab === 'cities') {
         loadCitiesTab().catch((e) => {
+          showError(e.message || String(e));
+          toast(e.message || String(e), false);
+        });
+      }
+      if (tab === 'catcands') {
+        loadCatCandsTab().catch((e) => {
           showError(e.message || String(e));
           toast(e.message || String(e), false);
         });
@@ -1378,11 +1516,52 @@
       }
     };
 
+    $('catCandReloadBtn').onclick = () => loadCatCandsTab().catch((e) => toast(e.message || String(e), false));
+    $('catCandPrev').onclick = () => {
+      if (state.catCandPage <= 1) return;
+      state.catCandPage -= 1;
+      loadCatCandSuggestions().catch((e) => toast(e.message || String(e), false));
+    };
+    $('catCandNext').onclick = () => {
+      const maxPage = Math.max(1, Math.ceil(state.catCandTotal / state.catCandPerPage));
+      if (state.catCandPage >= maxPage) return;
+      state.catCandPage += 1;
+      loadCatCandSuggestions().catch((e) => toast(e.message || String(e), false));
+    };
+    $('catCandStatus').onchange = () => {
+      state.catCandPage = 1;
+      loadCatCandSuggestions().catch((e) => toast(e.message || String(e), false));
+    };
+    let catCandQTimer;
+    $('catCandQ').oninput = () => {
+      clearTimeout(catCandQTimer);
+      catCandQTimer = setTimeout(() => {
+        state.catCandPage = 1;
+        loadCatCandSuggestions().catch((e) => toast(e.message || String(e), false));
+      }, 300);
+    };
+    $('catCandTable').onclick = (ev) => {
+      const tr = ev.target.closest('tr[data-catcand-id]');
+      if (!tr) return;
+      if (ev.target.classList.contains('btn-catcand-approve')) {
+        ev.target.disabled = true;
+        approveCatCandRow(tr)
+          .catch((e) => { toast(e.message || String(e), false); ev.target.disabled = false; });
+      }
+      if (ev.target.classList.contains('btn-catcand-reject')) {
+        ev.target.disabled = true;
+        rejectCatCandRow(tr)
+          .catch((e) => { toast(e.message || String(e), false); ev.target.disabled = false; });
+      }
+    };
+
     renderSourceChips();
     loadCreds();
     applyPreset('last7');
     if (location.hash === '#cities') {
       switchTab('cities');
+    } else if (location.hash === '#catcands' || location.hash === '#categories') {
+      switchTab('catcands');
     } else {
       loadStats().catch((e) => showError(e.message || String(e)));
     }

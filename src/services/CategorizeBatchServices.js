@@ -85,12 +85,23 @@ export async function categorizeBatch(events, defaultSource = 'backfill', option
   }
 
   let openaiUsage = null;
+  let categorySuggestions = null;
+  let tokensBySuggestion = [];
   if (needsAi.length) {
-    const { map: aiMap, usage } = await categorizeEventsWithAi(needsAi);
+    const {
+      map: aiMap,
+      suggestions: aiSuggestions,
+      usage,
+      suggestionUpsert,
+      tokensBySuggestion: tokenShares,
+    } = await categorizeEventsWithAi(needsAi);
     openaiUsage = usage || null;
+    categorySuggestions = suggestionUpsert;
+    tokensBySuggestion = tokenShares || [];
     const otherId = await getOtherCategoryId();
     for (const item of needsAi) {
       const catId = aiMap.get(item.tempId);
+      const suggested = aiSuggestions?.get(item.tempId) || null;
       const card = {
         name: item.name || '',
         description: item.description || '',
@@ -121,6 +132,7 @@ export async function categorizeBatch(events, defaultSource = 'backfill', option
           event_id: item.eventId,
           category_id: otherId,
           resolved_by: 'default_other',
+          suggested_name: suggested || null,
           source: item.source,
           city_id: item.city_id,
           country_id: item.country_id,
@@ -171,6 +183,8 @@ export async function categorizeBatch(events, defaultSource = 'backfill', option
     bySource,
     enrichedDescriptions,
     openaiUsage,
+    categorySuggestions,
+    tokensBySuggestion,
   };
 
   let runId = null;
