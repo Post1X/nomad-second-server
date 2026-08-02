@@ -12,7 +12,7 @@ import { createLoggerWithSource } from '../helpers/logger';
 const logger = createLoggerWithSource('AI_CATEGORY');
 
 /** Bump when prompt text changes so cached Settings prompt is rebuilt. */
-const AI_CATEGORY_PROMPT_VERSION = 'v3-strict-no-dupes';
+const AI_CATEGORY_PROMPT_VERSION = 'v6-films-en';
 
 const NAME_MAX = 120;
 const DESC_MAX = 200;
@@ -30,17 +30,19 @@ Names for quick scan: ${namesOnly}
 HARD RULES (follow strictly):
 1) ALWAYS assign an existing categoryId if the event is even roughly related by meaning.
    Examples that MUST map to existing (do NOT suggest new names):
-   - music night / вечер музыки / концерт / DJ / оркестр → Музыка (or closest music-related id)
+   - music / concert / DJ / оркестр / disco / genre names (cumbia, jazz…) → Музыка
    - stand-up / comedy / юмор → Юмор
-   - ballet / musical / circus show → Шоу/Мюзиклы or Танцы / Театр (pick closest existing)
-   - kids / family / детский → Семейное
-   - exhibition / museum show → Выставки or Искусство
-   - lecture / talk / мастер-класс talk-like → Лекции/Семинары
+   - ballet / musical / circus / nutcracker → Шоу/Мюзиклы or Танцы / Театр
+   - kids / family / children's show / детский → Семейное
+   - exhibition / museum → Выставки or Искусство
+   - lecture / talk / мастер-класс → Лекции/Семинары
+   - film / cinema / movie / watch together / screening → Фильмы (if that category exists in the list)
+   - cancelled / postponed / sold out / VIP / premium / elite / friends / fans → null (NOT a category)
 2) Prefer existing over inventing. When in doubt → existing categoryId, suggestedName=null.
-3) suggestedName ONLY if the topic is clearly outside ALL existing categories (e.g. cinema when no film category exists).
-4) suggestedName MUST NOT be a synonym, subtype, or rephrase of any existing name.
-   Forbidden near-duplicates of existing: "Концерты"≈Музыка, "Комедия"≈Юмор, "Балет"≈Танцы/Шоу, "Спектакль"≈Театр, "Для детей"≈Семейное, "Гастрономия вечер" if a food category exists, etc.
-5) suggestedName: 1–2 words, broad, reusable; same language as the list; no city/date/artist/venue.
+3) suggestedName ONLY for a broad EVENT TYPE missing from the list (e.g. Фильмы, Экскурсии).
+4) suggestedName MUST NOT be: synonym of existing; marketing tier (VIP/Premium/Elite); status (Cancelled);
+   venue/location; person/brand; food dish; music genre; truncated word; "пакеты"/"друзья"/"фанаты".
+5) suggestedName MUST be Russian Cyrillic, 1–2 words, broad, reusable. Never English/Latin-only.
 6) If categoryId is set → suggestedName MUST be null. Never invent category ids.
 
 Return JSON only:
@@ -81,11 +83,14 @@ export async function rebuildAiPromptIfNeeded() {
   return { updated: true, prompt, categories };
 }
 
-const callOpenAi = async (systemPrompt, userContent) => {
+const callOpenAi = async (systemPrompt, userContent, jsonHint = null) => {
   const apiKey = ENV.OPENAI_API_KEY;
   if (!apiKey) {
     throw new Error('OPENAI_API_KEY is not set');
   }
+
+  const hint = jsonHint
+    || '{"results":[{"id":"...","categoryId":null,"suggestedName":null}]}';
 
   const body = JSON.stringify({
     model: ENV.OPENAI_MODEL || 'gpt-4o-mini',
@@ -95,7 +100,7 @@ const callOpenAi = async (systemPrompt, userContent) => {
       { role: 'system', content: systemPrompt },
       {
         role: 'user',
-        content: `${userContent}\n\nJSON: {"results":[{"id":"...","categoryId":null,"suggestedName":null}]}`,
+        content: `${userContent}\n\nJSON: ${hint}`,
       },
     ],
   });
@@ -185,13 +190,15 @@ const resolveSuggestionAgainstExisting = (suggestedName, categoryByKey, categori
     [/^(театр|спектакл|драм)/, 'театр'],
     [/^(балет|танц|dance)/, 'танцы'],
     [/^(мюзикл|шоу|цирк)/, 'шоу/мюзиклы'],
-    [/^(дет|семь|family|kids)/, 'семейное'],
+    [/^(дет|семь|family|kids|children|child)/, 'семейное'],
     [/^(выставк|экспозиц)/, 'выставки'],
     [/^(лекци|семинар|talk|мастер.?класс)/, 'лекции/семинары'],
     [/^(спорт|матч|турнир)/, 'спорт'],
     [/^(фестивал)/, 'фестивали'],
     [/^(духовн|религ)/, 'духовное'],
     [/^(искусств)/, 'искусство'],
+    [/^(фильм|кино|film|movie|cinema|screening)/, 'фильмы'],
+    [/^(экскурс|tour|sightseeing)/, 'экскурсии'],
   ];
   for (const [re, targetKey] of SYN) {
     if (re.test(key) && categoryByKey.has(targetKey)) {
@@ -311,6 +318,16 @@ export async function categorizeEventsWithAi(events, options = {}) {
           }
         }
 
+        // Drop Latin / marketing / status junk before persist
+        if (suggested) {
+          const cyr = (suggested.match(/\p{Script=Cyrillic}/gu) || []).length;
+          const lat = (suggested.match(/[A-Za-z]/g) || []).length;
+          if (cyr === 0 || lat > cyr) suggested = null;
+          else if (/(cancel|premium|elite|\bvip\b|fan|friend|пакет|локац)/i.test(suggested)) {
+            suggested = null;
+          }
+        }
+
         if (catId) suggested = null;
 
         map.set(ev.tempId, catId);
@@ -374,8 +391,100 @@ export async function categorizeEventsWithAi(events, options = {}) {
   };
 }
 
+/**
+ * Collapse many raw pending suggestion names into ≤ maxCategories broad RU names.
+ * @param {Array<{ raw_name: string, hit_count?: number, tokens_total?: number, example_events?: string[] }>} pending
+ * @param {{ maxCategories?: number, existingNames?: string[] }} [options]
+ */
+export async function consolidateCategorySuggestionsWithAi(pending, options = {}) {
+  const maxCategories = Math.max(5, Math.min(20, Number(options.maxCategories) || 20));
+  const existingNames = (options.existingNames || []).filter((n) => n && n !== 'Другое');
+
+  if (!pending?.length) {
+    return { categories: [], usage: null };
+  }
+
+  if (!ENV.OPENAI_API_KEY) {
+    throw new Error('OPENAI_API_KEY is not set');
+  }
+
+  const input = pending
+    .slice(0, 400)
+    .map((p) => ({
+      name: p.raw_name,
+      hits: p.hit_count || 1,
+      tokens: Math.round(p.tokens_total || 0),
+      examples: (p.example_events || []).slice(0, 2),
+    }));
+
+  const systemPrompt = `You consolidate messy AI category candidates for Nomad into a SHORT list of broad event types.
+
+Existing categories (DO NOT recreate synonyms of these):
+${existingNames.join(', ') || '(none)'}
+
+HARD RULES:
+1) Output at most ${maxCategories} canonical categories.
+2) Each name: Russian Cyrillic ONLY, 1–2 words, broad reusable EVENT TYPE (e.g. Фильмы, Экскурсии).
+3) Merge narrow/noisy raw names into one broad name; drop marketing/status junk (Cancelled, VIP, Premium, Fans, Friends, Локация, пакеты).
+4) If a raw name is a synonym/subtype of an EXISTING category — omit it (do not output it).
+5) Music genres → omit (already covered by Музыка if present). Kids shows → omit if Семейное exists.
+6) For each kept category provide:
+   - name (RU)
+   - sources: raw names you merged into it
+   - keywords: 4–10 short match words (RU + useful EN synonyms like movie/cinema for Фильмы)
+
+Return JSON only:
+{"categories":[{"name":"Фильмы","sources":["Фильмы","Кино"],"keywords":[{"word":"фильм","value":3},{"word":"movie","value":2}]}]}`;
+
+  const userContent = `Raw pending candidates (JSON):\n${JSON.stringify(input)}`;
+
+  const { content, usage } = await callOpenAi(
+    systemPrompt,
+    userContent,
+    '{"categories":[{"name":"...","sources":[],"keywords":[{"word":"...","value":1}]}]}',
+  );
+
+  let parsed;
+  try {
+    parsed = JSON.parse(content);
+  } catch (e) {
+    logger.error(`Consolidate parse failed: ${e.message}`);
+    throw new Error('Failed to parse consolidate AI response');
+  }
+
+  const list = Array.isArray(parsed?.categories) ? parsed.categories : [];
+  const categories = list
+    .map((row) => ({
+      name: String(row?.name || '').trim(),
+      sources: Array.isArray(row?.sources)
+        ? row.sources.map((s) => String(s || '').trim()).filter(Boolean)
+        : [],
+      keywords: Array.isArray(row?.keywords)
+        ? row.keywords.map((k) => ({
+          word: String(k?.word || '').trim().toLowerCase(),
+          value: Number(k?.value) || 1,
+        })).filter((k) => k.word)
+        : [],
+    }))
+    .filter((row) => row.name)
+    .slice(0, maxCategories);
+
+  logger.info(`Consolidate AI → ${categories.length} categories (max=${maxCategories})`);
+  return {
+    categories,
+    usage: {
+      prompt_tokens: usage.prompt_tokens || 0,
+      completion_tokens: usage.completion_tokens || 0,
+      total_tokens: usage.total_tokens || (
+        (usage.prompt_tokens || 0) + (usage.completion_tokens || 0)
+      ),
+    },
+  };
+}
+
 export default {
   rebuildAiPromptIfNeeded,
   categorizeEventsWithAi,
+  consolidateCategorySuggestionsWithAi,
   computeCategoriesHash,
 };

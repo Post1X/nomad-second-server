@@ -19,11 +19,58 @@ export const normalizeCategoryKey = (name = '') => String(name || '')
 const isTooSpecific = (name = '') => {
   const s = String(name || '').trim();
   if (!s) return true;
-  if (s.length > 40) return true;
-  if ((s.match(/\s+/g) || []).length > 3) return true;
+  if (s.length < 3 || s.length > 32) return true;
+  if ((s.match(/\s+/g) || []).length > 2) return true;
   if (/\d{4}/.test(s)) return true;
+  // truncated / incomplete words often end mid-stem
+  if (/[а-яa-z]$/i.test(s) && s.length <= 5 && !/ы|и|а|я|е|о|у$/i.test(s)) {
+    // keep short valid roots like "Спорт" — only flag odd truncations elsewhere
+  }
+  if (/туриз$/i.test(s) || /мероприят$/i.test(s)) return true;
   return false;
 };
+
+/** Category names in Nomad dict are Russian — reject Latin-only AI noise. */
+const isNonRussianName = (name = '') => {
+  const s = String(name || '').trim();
+  if (!s) return true;
+  const cyr = (s.match(/\p{Script=Cyrillic}/gu) || []).length;
+  const lat = (s.match(/[A-Za-z]/g) || []).length;
+  return cyr === 0 || lat > cyr;
+};
+
+const GARBAGE_KEYS = new Set([
+  'cancelled', 'canceled', 'отменено', 'отмена',
+  'premium', 'elite', 'vip', 'friends', 'fans', 'fan',
+  'friends club', 'премиум', 'элит', 'элита',
+  'локация', 'место', 'адрес', 'добро',
+  'пакеты', 'эксклюзивные пакеты', 'пакет',
+  'друзья', 'фанаты', 'фанат',
+  'гриль', 'круиз', 'мода', 'кумбия',
+  'children show', 'childrens show', "children's show",
+  'детские мероприятия', 'детские шоу',
+]);
+
+const GARBAGE_RE = [
+  /cancel/i,
+  /premium|elite|\bvip\b/i,
+  /пакет/i,
+  /fan|friend/i,
+  /локац/i,
+  /^(добро|место)$/i,
+];
+
+const isGarbageSuggestion = (name = '') => {
+  const key = normalizeCategoryKey(name);
+  if (!key) return true;
+  if (GARBAGE_KEYS.has(key)) return true;
+  if (GARBAGE_RE.some((re) => re.test(name) || re.test(key))) return true;
+  return false;
+};
+
+export const isInvalidSuggestionName = (name = '') => (
+  isTooSpecific(name) || isNonRussianName(name) || isGarbageSuggestion(name)
+);
 
 /**
  * Upsert AI-suggested category names (already missing from EventsCategories).
@@ -45,7 +92,7 @@ export async function upsertCategorySuggestions(items = []) {
   for (const item of items) {
     const raw = String(item.name || '').trim();
     const key = normalizeCategoryKey(raw);
-    if (!key || isTooSpecific(raw) || existingKeys.has(key)) {
+    if (!key || isInvalidSuggestionName(raw) || existingKeys.has(key)) {
       if (existingKeys.has(key)) stats.skippedExisting += 1;
       else stats.skippedInvalid += 1;
       continue;
@@ -242,13 +289,12 @@ export async function approveCategorySuggestion(id, { name } = {}) {
 
   const maxSort = await EventsCategoriesSchema.findOne({}).sort({ sort: -1 }).select('sort').lean();
   const sort = (maxSort?.sort ?? 0) + 10;
-  // Prefer keywords already built at AI upsert; rebuild only for legacy rows.
-  const keywords = Array.isArray(suggestion.keywords) && suggestion.keywords.length
-    ? suggestion.keywords.map((k) => ({
-      word: String(k?.word || '').trim(),
-      value: Number(k?.value) || 1,
-    })).filter((k) => k.word)
-    : buildCategoryKeywords(categoryName, suggestion.example_events || []);
+  // Merge stored keywords + name stems + EN topic synonyms (movie/cinema for Фильмы…).
+  const keywords = buildCategoryKeywords(
+    categoryName,
+    suggestion.example_events || [],
+    Array.isArray(suggestion.keywords) ? suggestion.keywords : [],
+  );
 
   const { statusCode, data } = await requestJson(`${mainUrl}/api/parsing-dict/events-categories`, {
     method: 'POST',
@@ -297,6 +343,7 @@ export async function approveCategorySuggestion(id, { name } = {}) {
 
 export default {
   normalizeCategoryKey,
+  isInvalidSuggestionName,
   upsertCategorySuggestions,
   listCategorySuggestions,
   categorySuggestionsMetrics,

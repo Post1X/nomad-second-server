@@ -606,6 +606,21 @@
           <pre class="run-log" id="catBackfillLog">— нет логов —</pre>
         </div>
 
+        <div class="panel" style="margin-bottom:16px">
+          <div style="display:flex;gap:12px;flex-wrap:wrap;align-items:end;margin-bottom:10px">
+            <div>
+              <label>Max категорий</label><br/>
+              <input id="catConsolidateMax" type="number" min="5" max="20" value="20" style="width:90px" />
+            </div>
+            <button id="catConsolidateStartBtn" type="button">Схлопнуть до 15–20</button>
+            <span class="muted mono" id="catConsolidateStatus">idle</span>
+          </div>
+          <div class="muted" style="font-size:0.82rem;margin-bottom:8px">
+            AI сводит все pending-кандидаты к ≤N широким русским категориям (мусор отбрасывает). После — Approve вручную.
+          </div>
+          <pre class="run-log" id="catConsolidateLog">— нет логов —</pre>
+        </div>
+
         <div class="cards" id="catCandMetricCards"></div>
         <div style="display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap;align-items:end">
           <div>
@@ -1577,6 +1592,89 @@
       toast('AI backfill запущен');
     }
 
+    let catConsolidatePollTimer = null;
+
+    function renderCatConsolidateJob(job) {
+      const j = job || {};
+      const running = Boolean(j.running);
+      const statusEl = $('catConsolidateStatus');
+      const btn = $('catConsolidateStartBtn');
+      const logEl = $('catConsolidateLog');
+      if (running) {
+        statusEl.textContent = 'running…';
+        statusEl.style.color = 'var(--warn)';
+        btn.disabled = true;
+      } else if (j.error) {
+        statusEl.textContent = `error: ${j.error}`;
+        statusEl.style.color = 'var(--danger)';
+        btn.disabled = false;
+      } else if (j.finishedAt) {
+        statusEl.textContent = 'done';
+        statusEl.style.color = 'var(--accent2)';
+        btn.disabled = false;
+      } else {
+        statusEl.textContent = 'idle';
+        statusEl.style.color = 'var(--muted)';
+        btn.disabled = false;
+      }
+      const lines = (j.logs || []).map((row) => {
+        const ts = row.t ? new Date(row.t).toISOString().slice(11, 19) : '';
+        return `${ts}  ${row.msg}`;
+      });
+      logEl.textContent = lines.length ? lines.join('\n') : '— нет логов —';
+      if (running || (j.logs || []).length) {
+        logEl.scrollTop = logEl.scrollHeight;
+      }
+    }
+
+    function stopCatConsolidatePoll() {
+      if (catConsolidatePollTimer) {
+        clearInterval(catConsolidatePollTimer);
+        catConsolidatePollTimer = null;
+      }
+    }
+
+    async function pollCatConsolidateOnce() {
+      const data = await api('/parsing/categories/suggestions/consolidate');
+      renderCatConsolidateJob(data.job);
+      if (!data.job?.running) {
+        stopCatConsolidatePoll();
+        if (data.job?.finishedAt) {
+          await loadCatCandMetrics();
+          await loadCatCandSuggestions();
+        }
+      }
+    }
+
+    function startCatConsolidatePoll() {
+      stopCatConsolidatePoll();
+      catConsolidatePollTimer = setInterval(() => {
+        pollCatConsolidateOnce().catch((e) => {
+          stopCatConsolidatePoll();
+          toast(e.message || String(e), false);
+          $('catConsolidateStartBtn').disabled = false;
+        });
+      }, 1000);
+    }
+
+    async function startCatConsolidate() {
+      showError('');
+      saveCreds();
+      const maxRaw = $('catConsolidateMax').value.trim();
+      const body = {
+        maxCategories: maxRaw ? Number(maxRaw) : 20,
+      };
+      $('catConsolidateStartBtn').disabled = true;
+      $('catConsolidateLog').textContent = 'starting…';
+      const data = await api('/parsing/categories/suggestions/consolidate', {
+        method: 'POST',
+        body: JSON.stringify(body),
+      });
+      renderCatConsolidateJob(data.job);
+      startCatConsolidatePoll();
+      toast('Consolidate запущен');
+    }
+
     async function loadCatCandsTab() {
       showError('');
       saveCreds();
@@ -1586,7 +1684,12 @@
         const data = await api('/parsing/categories/suggestions/backfill');
         renderCatBackfillJob(data.job);
         if (data.job?.running) startCatBackfillPoll();
-      } catch (_) { /* ignore stale job fetch */ }
+      } catch (_) { /* ignore */ }
+      try {
+        const data = await api('/parsing/categories/suggestions/consolidate');
+        renderCatConsolidateJob(data.job);
+        if (data.job?.running) startCatConsolidatePoll();
+      } catch (_) { /* ignore */ }
     }
 
     async function approveCatCandRow(tr) {
@@ -1693,6 +1796,10 @@
     $('catBackfillStartBtn').onclick = () => startCatBackfill().catch((e) => {
       toast(e.message || String(e), false);
       $('catBackfillStartBtn').disabled = false;
+    });
+    $('catConsolidateStartBtn').onclick = () => startCatConsolidate().catch((e) => {
+      toast(e.message || String(e), false);
+      $('catConsolidateStartBtn').disabled = false;
     });
     $('catCandPrev').onclick = () => {
       if (state.catCandPage <= 1) return;
