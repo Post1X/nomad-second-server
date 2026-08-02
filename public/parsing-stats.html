@@ -584,8 +584,28 @@
       <div id="tab-catcands" class="hidden">
         <div class="muted" style="margin-bottom:12px;font-size:0.88rem">
           AI предлагает только отсутствующие в БД обобщённые категории.
-          Approve создаёт EventsCategory на <b>main + second</b> одной кнопкой.
+          Keywords собираются сразу при backfill; Approve создаёт EventsCategory на <b>main + second</b>.
         </div>
+
+        <div class="panel" style="margin-bottom:16px">
+          <div style="display:flex;gap:12px;flex-wrap:wrap;align-items:end;margin-bottom:10px">
+            <div>
+              <label>Limit (пусто = все)</label><br/>
+              <input id="catBackfillLimit" type="number" min="1" max="5000" placeholder="напр. 200" style="width:120px" />
+            </div>
+            <label class="chip" style="display:inline-flex;align-items:center;gap:6px;padding:9px 11px;background:var(--chip);border:1px solid var(--border);border-radius:8px;cursor:pointer;text-transform:none;letter-spacing:0;font-size:0.9rem;color:var(--text)">
+              <input type="checkbox" id="catBackfillApply" />
+              Применить категорию на события
+            </label>
+            <button id="catBackfillStartBtn" class="ok" type="button">Запустить AI backfill</button>
+            <span class="muted mono" id="catBackfillStatus">idle</span>
+          </div>
+          <div class="muted" style="font-size:0.82rem;margin-bottom:8px">
+            Прогоняет uncategorized / «Другое» через AI → кандидаты в таблице ниже. Лог обновляется live.
+          </div>
+          <pre class="run-log" id="catBackfillLog">— нет логов —</pre>
+        </div>
+
         <div class="cards" id="catCandMetricCards"></div>
         <div style="display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap;align-items:end">
           <div>
@@ -600,6 +620,7 @@
             <input id="catCandQ" placeholder="часть названия…" />
           </div>
           <button id="catCandReloadBtn" class="secondary" type="button">Обновить</button>
+          <button id="catCandExportBtn" class="secondary" type="button">Экспорт JSON</button>
           <button id="catCandPrev" class="secondary" type="button">←</button>
           <span class="mono" id="catCandPageLabel">1</span>
           <button id="catCandNext" class="secondary" type="button">→</button>
@@ -1356,6 +1377,7 @@
           <thead>
             <tr>
               <th>Кандидат</th>
+              <th>Keywords</th>
               <th>Hits</th>
               <th>Tokens (≈)</th>
               <th>Примеры / sources</th>
@@ -1367,6 +1389,10 @@
               const examples = (item.example_events || []).slice(0, 3)
                 .map((e) => `<div class="muted">${escapeHtml(e)}</div>`).join('');
               const sources = (item.sources || []).join(', ') || '—';
+              const kw = (item.keywords || [])
+                .slice(0, 10)
+                .map((k) => `${escapeHtml(k.word)}:${k.value}`)
+                .join(', ') || '—';
               const rejected = item.status === 'rejected'
                 ? `<div class="muted">reject: ${escapeHtml(item.reject_reason || '—')}</div>`
                 : '';
@@ -1375,6 +1401,7 @@
                   <input class="f-cat-name" value="${escapeHtml(item.raw_name)}" ${canApprove ? '' : 'disabled'} style="width:100%" />
                   ${rejected}
                 </td>
+                <td class="mono" style="font-size:0.75rem;max-width:220px;word-break:break-word">${kw}</td>
                 <td class="mono">${item.hit_count || 1}</td>
                 <td class="mono">${Math.round(item.tokens_total || 0)}</td>
                 <td>
@@ -1386,7 +1413,7 @@
                   <button type="button" class="danger btn-catcand-reject" ${canApprove ? '' : 'disabled'}>Reject</button>
                 </td>
               </tr>`;
-            }).join('') || '<tr><td colspan="5" class="muted">Нет кандидатов</td></tr>'}
+            }).join('') || '<tr><td colspan="6" class="muted">Нет кандидатов</td></tr>'}
           </tbody>
         </table>`;
     }
@@ -1411,11 +1438,155 @@
       renderCatCandTable(data.items || []);
     }
 
+    async function exportCatCandsJson() {
+      saveCreds();
+      const status = $('catCandStatus').value || 'pending';
+      const q = $('catCandQ').value.trim();
+      const items = [];
+      let page = 1;
+      let totalPages = 1;
+      do {
+        const qs = new URLSearchParams({
+          page: String(page),
+          per_page: '200',
+          status,
+        });
+        if (q) qs.set('q', q);
+        // eslint-disable-next-line no-await-in-loop
+        const data = await api(`/parsing/categories/suggestions?${qs}`);
+        items.push(...(data.items || []));
+        totalPages = Math.max(1, data.totalPages || 1);
+        page += 1;
+      } while (page <= totalPages);
+
+      const payload = {
+        exported_at: new Date().toISOString(),
+        status,
+        q: q || null,
+        total: items.length,
+        items: items.map((it) => ({
+          _id: it._id,
+          raw_name: it.raw_name,
+          normalized_key: it.normalized_key,
+          status: it.status,
+          hit_count: it.hit_count,
+          tokens_total: it.tokens_total,
+          keywords: it.keywords || [],
+          example_events: it.example_events || [],
+          sources: it.sources || [],
+          first_seen_at: it.first_seen_at,
+          last_seen_at: it.last_seen_at,
+          reject_reason: it.reject_reason || '',
+        })),
+      };
+
+      const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-');
+      a.href = url;
+      a.download = `category-suggestions-${status}-${stamp}.json`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+      toast(`Экспорт: ${items.length} кандидатов`);
+    }
+
+    let catBackfillPollTimer = null;
+
+    function renderCatBackfillJob(job) {
+      const j = job || {};
+      const running = Boolean(j.running);
+      const statusEl = $('catBackfillStatus');
+      const btn = $('catBackfillStartBtn');
+      const logEl = $('catBackfillLog');
+      if (running) {
+        statusEl.textContent = 'running…';
+        statusEl.style.color = 'var(--warn)';
+        btn.disabled = true;
+      } else if (j.error) {
+        statusEl.textContent = `error: ${j.error}`;
+        statusEl.style.color = 'var(--danger)';
+        btn.disabled = false;
+      } else if (j.finishedAt) {
+        statusEl.textContent = 'done';
+        statusEl.style.color = 'var(--accent2)';
+        btn.disabled = false;
+      } else {
+        statusEl.textContent = 'idle';
+        statusEl.style.color = 'var(--muted)';
+        btn.disabled = false;
+      }
+      const lines = (j.logs || []).map((row) => {
+        const ts = row.t ? new Date(row.t).toISOString().slice(11, 19) : '';
+        return `${ts}  ${row.msg}`;
+      });
+      logEl.textContent = lines.length ? lines.join('\n') : '— нет логов —';
+      if (running || (j.logs || []).length) {
+        logEl.scrollTop = logEl.scrollHeight;
+      }
+    }
+
+    function stopCatBackfillPoll() {
+      if (catBackfillPollTimer) {
+        clearInterval(catBackfillPollTimer);
+        catBackfillPollTimer = null;
+      }
+    }
+
+    async function pollCatBackfillOnce() {
+      const data = await api('/parsing/categories/suggestions/backfill');
+      renderCatBackfillJob(data.job);
+      if (!data.job?.running) {
+        stopCatBackfillPoll();
+        if (data.job?.finishedAt) {
+          await loadCatCandMetrics();
+          await loadCatCandSuggestions();
+        }
+      }
+    }
+
+    function startCatBackfillPoll() {
+      stopCatBackfillPoll();
+      catBackfillPollTimer = setInterval(() => {
+        pollCatBackfillOnce().catch((e) => {
+          stopCatBackfillPoll();
+          toast(e.message || String(e), false);
+          $('catBackfillStartBtn').disabled = false;
+        });
+      }, 1000);
+    }
+
+    async function startCatBackfill() {
+      showError('');
+      saveCreds();
+      const limitRaw = $('catBackfillLimit').value.trim();
+      const body = {
+        applyCategory: Boolean($('catBackfillApply').checked),
+      };
+      if (limitRaw) body.limit = Number(limitRaw);
+      $('catBackfillStartBtn').disabled = true;
+      $('catBackfillLog').textContent = 'starting…';
+      const data = await api('/parsing/categories/suggestions/backfill', {
+        method: 'POST',
+        body: JSON.stringify(body),
+      });
+      renderCatBackfillJob(data.job);
+      startCatBackfillPoll();
+      toast('AI backfill запущен');
+    }
+
     async function loadCatCandsTab() {
       showError('');
       saveCreds();
       await loadCatCandMetrics();
       await loadCatCandSuggestions();
+      try {
+        const data = await api('/parsing/categories/suggestions/backfill');
+        renderCatBackfillJob(data.job);
+        if (data.job?.running) startCatBackfillPoll();
+      } catch (_) { /* ignore stale job fetch */ }
     }
 
     async function approveCatCandRow(tr) {
@@ -1426,7 +1597,8 @@
         method: 'POST',
         body: JSON.stringify({ name }),
       });
-      toast(`Категория main+second: ${data.category?.name} (${data.category?._id})`);
+      const kw = (data.category?.keywords || []).length;
+      toast(`Категория main+second: ${data.category?.name} (${data.category?._id}), keywords=${kw}`);
       await loadCatCandsTab();
     }
 
@@ -1517,6 +1689,11 @@
     };
 
     $('catCandReloadBtn').onclick = () => loadCatCandsTab().catch((e) => toast(e.message || String(e), false));
+    $('catCandExportBtn').onclick = () => exportCatCandsJson().catch((e) => toast(e.message || String(e), false));
+    $('catBackfillStartBtn').onclick = () => startCatBackfill().catch((e) => {
+      toast(e.message || String(e), false);
+      $('catBackfillStartBtn').disabled = false;
+    });
     $('catCandPrev').onclick = () => {
       if (state.catCandPage <= 1) return;
       state.catCandPage -= 1;

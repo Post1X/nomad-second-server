@@ -93,6 +93,7 @@ class DictSyncServices {
     const categoriesUpserted = await upsertById(EventsCategoriesSchema, eventCategories, (c) => ({
       name: c.name,
       sort: c.sort ?? 999,
+      keywords: Array.isArray(c.keywords) ? c.keywords : [],
     }));
 
         const remoteIds = new Set(eventCategories.map((c) => String(c._id)));

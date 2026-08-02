@@ -2,6 +2,7 @@ import CategorySuggestions from '../schemas/CategorySuggestionsSchema';
 import EventsCategoriesSchema from '../schemas/EventsCategoriesSchema';
 import SettingsSchema from '../schemas/SettingsSchema';
 import { ENV, SETTINGS_KEYS } from '../helpers/constants';
+import { buildCategoryKeywords } from '../helpers/buildCategoryKeywords';
 import { requestJson } from './cityDiscovery/http';
 import { createLoggerWithSource } from '../helpers/logger';
 
@@ -73,6 +74,7 @@ export async function upsertCategorySuggestions(items = []) {
     // eslint-disable-next-line no-await-in-loop
     const existingDoc = await CategorySuggestions.findOne({ normalized_key: row.normalized_key });
     if (!existingDoc) {
+      const keywords = buildCategoryKeywords(row.raw_name, row.examples);
       // eslint-disable-next-line no-await-in-loop
       await CategorySuggestions.create({
         raw_name: row.raw_name,
@@ -81,6 +83,7 @@ export async function upsertCategorySuggestions(items = []) {
         hit_count: row.hits,
         tokens_total: row.tokens,
         example_events: row.examples,
+        keywords,
         sources: [...row.sources],
         first_seen_at: new Date(),
         last_seen_at: new Date(),
@@ -93,6 +96,7 @@ export async function upsertCategorySuggestions(items = []) {
         if (examples.length >= 12) break;
         if (!examples.includes(ex)) examples.push(ex);
       }
+      const keywords = buildCategoryKeywords(row.raw_name, examples);
       // eslint-disable-next-line no-await-in-loop
       await CategorySuggestions.updateOne(
         { _id: existingDoc._id },
@@ -101,6 +105,7 @@ export async function upsertCategorySuggestions(items = []) {
             raw_name: row.raw_name,
             last_seen_at: new Date(),
             example_events: examples,
+            keywords,
             sources: [...sources],
             ...(existingDoc.status === 'rejected' ? { status: 'pending', reject_reason: '' } : {}),
           },
@@ -141,8 +146,21 @@ export async function listCategorySuggestions({
       .lean(),
   ]);
 
+  // Legacy pending rows (created before keywords-on-upsert): fill now.
+  const hydrated = [];
+  for (const item of items) {
+    if (Array.isArray(item.keywords) && item.keywords.length) {
+      hydrated.push(item);
+      continue;
+    }
+    const keywords = buildCategoryKeywords(item.raw_name, item.example_events || []);
+    // eslint-disable-next-line no-await-in-loop
+    await CategorySuggestions.updateOne({ _id: item._id }, { $set: { keywords } });
+    hydrated.push({ ...item, keywords });
+  }
+
   return {
-    items,
+    items: hydrated,
     total,
     page: Math.max(1, page),
     per_page,
@@ -224,11 +242,18 @@ export async function approveCategorySuggestion(id, { name } = {}) {
 
   const maxSort = await EventsCategoriesSchema.findOne({}).sort({ sort: -1 }).select('sort').lean();
   const sort = (maxSort?.sort ?? 0) + 10;
+  // Prefer keywords already built at AI upsert; rebuild only for legacy rows.
+  const keywords = Array.isArray(suggestion.keywords) && suggestion.keywords.length
+    ? suggestion.keywords.map((k) => ({
+      word: String(k?.word || '').trim(),
+      value: Number(k?.value) || 1,
+    })).filter((k) => k.word)
+    : buildCategoryKeywords(categoryName, suggestion.example_events || []);
 
   const { statusCode, data } = await requestJson(`${mainUrl}/api/parsing-dict/events-categories`, {
     method: 'POST',
     headers: { 'X-Api-Key': apiKey },
-    body: JSON.stringify({ name: categoryName, sort }),
+    body: JSON.stringify({ name: categoryName, sort, keywords }),
   });
 
   if (statusCode !== 200 || data?.status !== 'ok' || !data?.category?._id) {
@@ -246,6 +271,9 @@ export async function approveCategorySuggestion(id, { name } = {}) {
       $set: {
         name: remote.name || categoryName,
         sort: remote.sort ?? sort,
+        keywords: Array.isArray(remote.keywords) && remote.keywords.length
+          ? remote.keywords
+          : keywords,
       },
     },
     { upsert: true, setDefaultsOnInsert: true },

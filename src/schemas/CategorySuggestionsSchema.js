@@ -31,6 +31,11 @@ const CategorySuggestionsSchema = new mongoose.Schema({
     type: [String],
     default: [],
   },
+  /** Built at AI upsert time (before approve). */
+  keywords: [{
+    word: { type: String, required: true },
+    value: { type: Number, required: true, default: 1 },
+  }],
   sources: {
     type: [{
       type: String,

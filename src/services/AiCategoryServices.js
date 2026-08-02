@@ -12,28 +12,39 @@ import { createLoggerWithSource } from '../helpers/logger';
 const logger = createLoggerWithSource('AI_CATEGORY');
 
 /** Bump when prompt text changes so cached Settings prompt is rebuilt. */
-const AI_CATEGORY_PROMPT_VERSION = 'v2-suggestions';
+const AI_CATEGORY_PROMPT_VERSION = 'v3-strict-no-dupes';
 
 const NAME_MAX = 120;
 const DESC_MAX = 200;
 
 const buildSystemPrompt = (categories) => {
-  const list = categories
-    .filter((c) => c.name !== 'Другое')
-    .map((c) => `${c._id}:${c.name}`)
-    .join('\n');
+  const usable = categories.filter((c) => c.name !== 'Другое');
+  const list = usable.map((c) => `${c._id}:${c.name}`).join('\n');
+  const namesOnly = usable.map((c) => c.name).join(', ');
 
-  return `Event categorizer for Nomad. Existing categories (id:name):
+  return `You categorize events for Nomad. Existing categories ONLY:
 ${list}
 
-For each event:
-1) Prefer an existing categoryId from the list if it fits reasonably.
-2) If NONE fit, set categoryId=null and suggestedName to ONE broad reusable category (same language/style as the list).
-Rules for suggestedName: short (1-3 words), general (e.g. "Фильмы", not "Кино под открытым небом"); no city/date/artist; no near-duplicates of existing names.
-If categoryId is set, suggestedName must be null.
-Never invent category ids.
+Names for quick scan: ${namesOnly}
 
-Return JSON: {"results":[{"id":"...","categoryId":"...|null","suggestedName":"...|null"}]}`;
+HARD RULES (follow strictly):
+1) ALWAYS assign an existing categoryId if the event is even roughly related by meaning.
+   Examples that MUST map to existing (do NOT suggest new names):
+   - music night / вечер музыки / концерт / DJ / оркестр → Музыка (or closest music-related id)
+   - stand-up / comedy / юмор → Юмор
+   - ballet / musical / circus show → Шоу/Мюзиклы or Танцы / Театр (pick closest existing)
+   - kids / family / детский → Семейное
+   - exhibition / museum show → Выставки or Искусство
+   - lecture / talk / мастер-класс talk-like → Лекции/Семинары
+2) Prefer existing over inventing. When in doubt → existing categoryId, suggestedName=null.
+3) suggestedName ONLY if the topic is clearly outside ALL existing categories (e.g. cinema when no film category exists).
+4) suggestedName MUST NOT be a synonym, subtype, or rephrase of any existing name.
+   Forbidden near-duplicates of existing: "Концерты"≈Музыка, "Комедия"≈Юмор, "Балет"≈Танцы/Шоу, "Спектакль"≈Театр, "Для детей"≈Семейное, "Гастрономия вечер" if a food category exists, etc.
+5) suggestedName: 1–2 words, broad, reusable; same language as the list; no city/date/artist/venue.
+6) If categoryId is set → suggestedName MUST be null. Never invent category ids.
+
+Return JSON only:
+{"results":[{"id":"...","categoryId":"...|null","suggestedName":"...|null"}]}`;
 };
 
 export const computeCategoriesHash = (categories) => {
@@ -149,6 +160,48 @@ const eventPayloadLine = (ev) => JSON.stringify({
 });
 
 /**
+ * Collapse suggestions that are synonyms / near-duplicates of existing categories.
+ * Returns existing categoryId or null if truly new.
+ */
+const resolveSuggestionAgainstExisting = (suggestedName, categoryByKey, categories) => {
+  const key = normalizeCategoryKey(suggestedName);
+  if (!key) return null;
+  if (categoryByKey.has(key)) return categoryByKey.get(key);
+
+  // substring / containment against existing names (Музыка ↔ концерты музыки)
+  for (const cat of categories || []) {
+    if (!cat?.name || cat.name === 'Другое') continue;
+    const existingKey = normalizeCategoryKey(cat.name);
+    if (!existingKey || existingKey.length < 3) continue;
+    if (key.includes(existingKey) || existingKey.includes(key)) {
+      return String(cat._id);
+    }
+  }
+
+  // common synonym stems → existing Russian categories
+  const SYN = [
+    [/^(концерт|музыка|оркестр|джаз|рок|симфон|dj|диджей)/, 'музыка'],
+    [/^(юмор|комеди|стендап|standup|kvn|квн)/, 'юмор'],
+    [/^(театр|спектакл|драм)/, 'театр'],
+    [/^(балет|танц|dance)/, 'танцы'],
+    [/^(мюзикл|шоу|цирк)/, 'шоу/мюзиклы'],
+    [/^(дет|семь|family|kids)/, 'семейное'],
+    [/^(выставк|экспозиц)/, 'выставки'],
+    [/^(лекци|семинар|talk|мастер.?класс)/, 'лекции/семинары'],
+    [/^(спорт|матч|турнир)/, 'спорт'],
+    [/^(фестивал)/, 'фестивали'],
+    [/^(духовн|религ)/, 'духовное'],
+    [/^(искусств)/, 'искусство'],
+  ];
+  for (const [re, targetKey] of SYN) {
+    if (re.test(key) && categoryByKey.has(targetKey)) {
+      return categoryByKey.get(targetKey);
+    }
+  }
+  return null;
+};
+
+/**
  * @returns {{
  *  map: Map<string, string|null>,
  *  suggestions: Map<string, string|null>,
@@ -157,7 +210,12 @@ const eventPayloadLine = (ev) => JSON.stringify({
  *  tokensBySuggestion: Array<{name:string, events:number, tokens:number}>
  * }}
  */
-export async function categorizeEventsWithAi(events) {
+/**
+ * @param {Array} events
+ * @param {{ persistSuggestions?: boolean }} [options]
+ */
+export async function categorizeEventsWithAi(events, options = {}) {
+  const persistSuggestions = options.persistSuggestions !== false;
   const map = new Map();
   const suggestions = new Map();
   const usageTotals = {
@@ -191,9 +249,9 @@ export async function categorizeEventsWithAi(events) {
     (categories || await EventsCategoriesSchema.find({}).select('_id name').lean())
       .map((c) => String(c._id)),
   );
+  const cats = categories || await EventsCategoriesSchema.find({}).select('_id name').lean();
   const categoryByKey = new Map(
-    (categories || await EventsCategoriesSchema.find({}).select('_id name').lean())
-      .map((c) => [normalizeCategoryKey(c.name), String(c._id)]),
+    cats.map((c) => [normalizeCategoryKey(c.name), String(c._id)]),
   );
 
   const batches = [];
@@ -244,9 +302,9 @@ export async function categorizeEventsWithAi(events) {
           catId = null;
         }
 
-        // If model suggested a name that already exists — use existing id
+        // Collapse synonyms / near-duplicates of existing categories
         if (!catId && suggested) {
-          const existingId = categoryByKey.get(normalizeCategoryKey(suggested));
+          const existingId = resolveSuggestionAgainstExisting(suggested, categoryByKey, cats);
           if (existingId) {
             catId = existingId;
             suggested = null;
@@ -288,8 +346,10 @@ export async function categorizeEventsWithAi(events) {
   }
 
   let suggestionUpsert = null;
-  if (upsertItems.length) {
+  if (upsertItems.length && persistSuggestions) {
     suggestionUpsert = await upsertCategorySuggestions(upsertItems);
+  } else if (upsertItems.length && !persistSuggestions) {
+    suggestionUpsert = { skippedPersist: true, wouldUpsert: upsertItems.length };
   }
 
   const tokensBySuggestion = [...tokensBySuggestionMap.values()]

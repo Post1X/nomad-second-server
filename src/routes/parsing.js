@@ -36,6 +36,8 @@ router.post('/cities/suggestions/:id/reject', ParsingController.rejectCitySugges
 
 router.get('/categories/suggestions', ParsingController.listCategorySuggestions);
 router.get('/categories/suggestions/metrics', ParsingController.categorySuggestionsMetrics);
+router.post('/categories/suggestions/backfill', ParsingController.startCategorySuggestionsBackfill);
+router.get('/categories/suggestions/backfill', ParsingController.getCategorySuggestionsBackfill);
 router.post('/categories/suggestions/:id/approve', ParsingController.approveCategorySuggestion);
 router.post('/categories/suggestions/:id/reject', ParsingController.rejectCategorySuggestion);
 

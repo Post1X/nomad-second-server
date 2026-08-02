@@ -10,6 +10,7 @@ import StatsServices from '../services/StatsServices';
 import BackfillStatsServices from '../services/BackfillStatsServices';
 import CityDiscoveryServices from '../services/CityDiscoveryServices';
 import CategorySuggestionServices from '../services/CategorySuggestionServices';
+import CategorySuggestionsBackfillServices from '../services/CategorySuggestionsBackfillServices';
 import { categorizeBatch } from '../services/CategorizeBatchServices';
 import { lookupParsedEvents } from '../services/LookupParsedEventsServices';
 import { enrichFromTicketmaster } from '../services/EnrichTicketmasterServices';
@@ -803,6 +804,33 @@ class ParsingController {
       if (error.status) {
         return res.status(error.status).json({ status: 'error', message: error.message });
       }
+      next(error);
+    }
+  };
+
+  static startCategorySuggestionsBackfill = async (req, res, next) => {
+    try {
+      const body = req.body || {};
+      const job = await CategorySuggestionsBackfillServices.runCategorySuggestionsBackfill({
+        limit: body.limit != null && body.limit !== '' ? body.limit : null,
+        applyCategory: Boolean(body.applyCategory),
+        chunk: body.chunk,
+        dryRun: Boolean(body.dryRun),
+      });
+      res.json({ status: 'ok', job });
+    } catch (error) {
+      if (error.status) {
+        return res.status(error.status).json({ status: 'error', message: error.message });
+      }
+      next(error);
+    }
+  };
+
+  static getCategorySuggestionsBackfill = async (req, res, next) => {
+    try {
+      const job = CategorySuggestionsBackfillServices.getCategorySuggestionsBackfillJob();
+      res.json({ status: 'ok', job });
+    } catch (error) {
       next(error);
     }
   };

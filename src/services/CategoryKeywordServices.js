@@ -12,16 +12,43 @@ const WEIGHTS = {
 
 const escapeRegExp = (s) => String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
+/**
+ * Merge file-config keywords with per-category keywords stored in DB
+ * (new categories approved from UI get DB keywords).
+ */
+const mergeKeywordMaps = (configMap, categories) => {
+  const merged = { ...(configMap || {}) };
+  for (const cat of categories || []) {
+    const name = cat?.name;
+    if (!name || name === 'Другое') continue;
+    const dbKw = Array.isArray(cat.keywords) ? cat.keywords : [];
+    if (!dbKw.length) continue;
+    const existing = merged[name] ? [...merged[name]] : [];
+    const seen = new Set(existing.map((k) => String(k.word || '').toLowerCase()));
+    for (const k of dbKw) {
+      const word = String(k?.word || '').trim();
+      if (!word) continue;
+      const key = word.toLowerCase();
+      if (seen.has(key)) continue;
+      seen.add(key);
+      existing.push({ word, value: Number(k.value) || 1 });
+    }
+    merged[name] = existing;
+  }
+  return merged;
+};
+
 export async function detectCategoryByKeywords(event, source) {
   const config = getCategoryConfigForSource(source);
   const threshold = config.threshold ?? 2;
-  const keywordMap = config.keywords || {};
 
   const categories = await EventsCategoriesSchema.find({}).lean();
   if (!categories.length) {
     logger.warn('No events categories in local DB — skip keyword detection');
     return { categoryId: null, score: 0, categoryName: null };
   }
+
+  const keywordMap = mergeKeywordMaps(config.keywords || {}, categories);
 
   const nameById = new Map(categories.map((c) => [String(c._id), c.name]));
   const idByName = new Map(categories.map((c) => [c.name, String(c._id)]));

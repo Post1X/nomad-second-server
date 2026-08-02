@@ -9,7 +9,8 @@
     "build": "yarn clean && babel ./src --out-dir dist --copy-files",
     "prod": "yarn build && node -r dotenv/config ./dist/bin/www",
     "parse:ticketmaster": "babel-node -r dotenv/config scripts/runTicketmasterParsing.js",
-    "test:merge": "babel-node -r dotenv/config scripts/testMergeLogic.js"
+    "test:merge": "babel-node -r dotenv/config scripts/testMergeLogic.js",
+    "backfill:category-suggestions": "babel-node -r dotenv/config scripts/backfillCategorySuggestions.js"
   },
   "dependencies": {
     "cheerio": "^1.0.0",
