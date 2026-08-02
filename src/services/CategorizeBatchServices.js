@@ -129,7 +129,7 @@ export async function categorizeBatch(events, defaultSource = 'backfill', option
         results[item.index] = {
           event_id: item.eventId,
           category_id: otherId,
-          resolved_by: 'default_other',
+          resolved_by: 'other',
           suggested_name: suggested || null,
           source: item.source,
           city_id: item.city_id,
@@ -164,7 +164,7 @@ export async function categorizeBatch(events, defaultSource = 'backfill', option
     const s = bySource[src];
     s.total += 1;
     bump(s.byResolvedBy, row.resolved_by || 'unknown');
-    if (row.resolved_by === 'default_other' || !row.category_id) {
+    if (row.resolved_by === 'default_other' || row.resolved_by === 'other' || !row.category_id) {
       s.noCategory += 1;
       s.noCategoryAfterAi += 1;
     }

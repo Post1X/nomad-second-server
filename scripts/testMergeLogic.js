@@ -140,12 +140,11 @@ async function main() {
   if (!discarded && winnerSource === 'eventim'
     && merged.parser_unique_id === 'puid-cross-1'
     && merged.address === 'Hall B'
-    && merged.photos?.length === 2
-    && merged.photos.some((p) => p.full_url === 'http://a')
-    && merged.photos.some((p) => p.full_url === 'http://b')
+    && merged.photos?.length === 1
+    && merged.photos[0]?.full_url === 'http://b'
     && Number(merged.max_price) === 40
     && parseHoldingDate(merged.holding_date).length >= 2) {
-    ok('cross merge: address by priority, photos union, dates via holding_date');
+    ok('cross merge: address by priority, photos replace, dates via holding_date');
   } else {
     fail('cross merge', JSON.stringify({
       winnerSource,
@@ -157,10 +156,11 @@ async function main() {
     }));
   }
 
-  // equal priority → merge (not discard)
+  // equal priority → merge (not discard); photos from newer (incoming)
   const eq = mergeCrossSourceEvent(existing, 'eventim', { ...incoming, source: 'ticketmaster' }, 'ticketmaster');
-  if (!eq.discarded && eq.event.photos?.length === 2) ok('equal priority merges (photos union)');
-  else fail('equal merge', JSON.stringify({ discarded: eq.discarded, photos: eq.event?.photos }));
+  if (!eq.discarded && eq.event.photos?.length === 1 && eq.event.photos[0]?.full_url === 'http://b') {
+    ok('equal priority merges (photos replace from newer)');
+  } else fail('equal merge', JSON.stringify({ discarded: eq.discarded, photos: eq.event?.photos }));
 
   const low = mergeCrossSourceEvent(existing, 'eventim', incoming, 'fienta');
   if (low.discarded) ok('lower priority fully discarded');

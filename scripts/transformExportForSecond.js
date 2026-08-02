@@ -116,8 +116,41 @@ const formatHoldingDate = (dates) => {
   return parts.join(', ');
 };
 
+/** Same rules as src/helpers/israelinfoDates.js (kept inline for plain node). */
+const parseIsraelinfoDatesFromText = (text = '') => {
+  const block = String(text || '').match(/Дат[аы]\s*:\s*([^\n]+?)(?:\s+Город[аы]?|$)/i);
+  const src = block ? block[1] : String(text || '');
+  const dates = [];
+  const toDate = (d, m, yRaw) => {
+    let year = Number(yRaw);
+    if (year < 100) year += 2000;
+    const dt = new Date(Date.UTC(year, Number(m) - 1, Number(d)));
+    return Number.isNaN(dt.getTime()) ? null : dt;
+  };
+  const rangeRe = /(\d{1,2})[./](\d{1,2})[./](\d{2,4})\s*[–-]\s*(\d{1,2})[./](\d{1,2})[./](\d{2,4})/g;
+  let rm;
+  while ((rm = rangeRe.exec(src))) {
+    const start = toDate(rm[1], rm[2], rm[3]);
+    const end = toDate(rm[4], rm[5], rm[6]);
+    if (!start || !end) continue;
+    const from = start <= end ? start : end;
+    const to = start <= end ? end : start;
+    for (let t = from.getTime(); t <= to.getTime(); t += 86400000) dates.push(new Date(t));
+  }
+  const singleRe = /(\d{1,2})[./](\d{1,2})[./](\d{2,4})/g;
+  let sm;
+  while ((sm = singleRe.exec(src))) {
+    const d = toDate(sm[1], sm[2], sm[3]);
+    if (d) dates.push(d);
+  }
+  return uniqueSortedDays(dates);
+};
+
 const collectDates = (ev) => {
   const dates = [];
+  if (ev.source === 'israelinfo' && ev.description) {
+    dates.push(...parseIsraelinfoDatesFromText(ev.description));
+  }
   if (ev.date_start) dates.push(ev.date_start);
   if (ev.date_end) dates.push(ev.date_end);
   if (ev.holding_date) dates.push(...parseHoldingDate(ev.holding_date));
@@ -141,41 +174,56 @@ const unionDatesPrices = (a, b) => {
 const PRIORITY_FIELDS = [
   'source', 'specialization', 'description', 'address',
   'lat', 'lon', 'is_special_point_on_map',
-  'contacts', 'events_category_id', 'category_resolved_by',
+  'contacts', 'photos', 'events_category_id', 'category_resolved_by',
   'country_id', 'admin_id',
 ];
 
-const mergePhotos = (a, b) => {
-  const list = [...(Array.isArray(a) ? a : []), ...(Array.isArray(b) ? b : [])];
-  const seen = new Set();
-  const out = [];
-  for (const p of list) {
-    const url = typeof p === 'string' ? p : (p?.full_url || p?.url || '');
-    if (!url || seen.has(url)) continue;
-    seen.add(url);
-    out.push({ full_url: url });
-  }
-  return out;
+/** Photos: replace from winner; if winner empty keep secondary. */
+const replacePhotos = (primary, secondary) => {
+  const norm = (photos) => {
+    if (!Array.isArray(photos)) return [];
+    const out = [];
+    const seen = new Set();
+    for (const p of photos) {
+      const url = typeof p === 'string' ? p : (p?.full_url || p?.url || '');
+      if (!url || seen.has(url)) continue;
+      seen.add(url);
+      out.push({ full_url: url });
+    }
+    return out;
+  };
+  const fromPrimary = norm(primary);
+  return fromPrimary.length ? fromPrimary : norm(secondary);
 };
 
 const mergeKeepHigher = (existing, incoming) => {
   const ra = sourceRank(existing.source);
   const rb = sourceRank(incoming.source);
   if (rb < ra) return { kept: existing, discarded: true };
-  // equal or higher → merge: priority fields from incoming, photos+dates union
+  // equal or higher → merge: priority fields from incoming (photos REPLACE), dates union
   const next = {
     ...existing,
     ...incoming,
     ...unionDatesPrices(existing, incoming),
-    photos: mergePhotos(existing.photos, incoming.photos),
+    photos: replacePhotos(incoming.photos, existing.photos),
     parser_unique_id: existing.parser_unique_id || incoming.parser_unique_id || crypto.randomUUID(),
     source: incoming.source,
   };
   for (const f of PRIORITY_FIELDS) {
-    if (incoming[f] != null && incoming[f] !== '') next[f] = incoming[f];
+    if (f === 'photos') continue;
+    if (incoming[f] != null && incoming[f] !== '') {
+      if (f === 'specialization' && (incoming[f] === 'Event' || /^none$/i.test(String(incoming[f])))) {
+        if (existing.specialization && existing.specialization !== 'Event') continue;
+      }
+      next[f] = incoming[f];
+    }
   }
   if (incoming.lat == null && existing.lat != null) next.lat = existing.lat;
   if (incoming.lon == null && existing.lon != null) next.lon = existing.lon;
+  if (next.category_resolved_by === 'none' || next.category_resolved_by === 'None'
+    || next.category_resolved_by === 'default_other') {
+    next.category_resolved_by = 'other';
+  }
   delete next.ticketmaster_id;
   delete next.fingerprint;
   delete next.exported_at;
@@ -212,10 +260,20 @@ const strip = (ev) => {
   return next;
 };
 
+function loadCategoryMap() {
+  const mapPath = process.env.CATEGORIES_JSON
+    || path.resolve(__dirname, '../tmp/categories-id-name.json');
+  if (fs.existsSync(mapPath)) {
+    return JSON.parse(fs.readFileSync(mapPath, 'utf8'));
+  }
+  return {};
+}
+
 function main() {
   const raw = JSON.parse(fs.readFileSync(IN, 'utf8'));
   const items = raw.items || [];
-  console.log(`in items=${items.length}`);
+  const catMap = loadCategoryMap();
+  console.log(`in items=${items.length}, categories=${Object.keys(catMap).length}`);
 
   let skippedPast = 0;
   let skippedNoCity = 0;
@@ -244,11 +302,21 @@ function main() {
     }
     delete ed.coordinates;
 
+    if (ed.category_resolved_by === 'none' || ed.category_resolved_by === 'None'
+      || ed.category_resolved_by === 'default_other') {
+      ed.category_resolved_by = 'other';
+    }
+
     const dates = collectDates(ed);
     if (dates.length) {
       ed.date_start = dates[0];
       ed.date_end = dates[dates.length - 1];
       ed.holding_date = formatHoldingDate(dates);
+    }
+
+    const catName = ed.events_category_id ? catMap[String(ed.events_category_id)] : null;
+    if (!ed.specialization || ed.specialization === 'Event' || /^none$/i.test(String(ed.specialization))) {
+      ed.specialization = (catName && !/^none$/i.test(catName)) ? catName : 'Другое';
     }
 
     const puid = item.parser_unique_id || ed.parser_unique_id || crypto.randomUUID();

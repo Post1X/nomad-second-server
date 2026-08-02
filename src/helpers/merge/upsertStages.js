@@ -6,7 +6,7 @@ import {
 
 /**
  * Fields from higher-priority source (equal priority → newer / incoming).
- * photos are NOT here — they are always unioned.
+ * photos: replace from winner (not union).
  */
 export const PRIORITY_FIELDS = [
   'source',
@@ -18,6 +18,7 @@ export const PRIORITY_FIELDS = [
   'is_special_point_on_map',
   'coordinates',
   'contacts',
+  'photos',
   'events_category_id',
   'category_resolved_by',
   'country_id',
@@ -73,18 +74,28 @@ export const collectDates = (event) => {
     .filter((d) => !Number.isNaN(d.getTime()));
 };
 
-/** Union photos by full_url (always merge, not priority-replace). */
-export const mergePhotos = (a, b) => {
-  const list = [...(Array.isArray(a) ? a : []), ...(Array.isArray(b) ? b : [])];
-  const seen = new Set();
+/** Normalize photos to [{ full_url }]. */
+export const normalizePhotos = (photos) => {
+  if (!Array.isArray(photos)) return [];
   const out = [];
-  for (const p of list) {
+  const seen = new Set();
+  for (const p of photos) {
     const url = typeof p === 'string' ? p : (p?.full_url || p?.url || '');
     if (!url || seen.has(url)) continue;
     seen.add(url);
     out.push({ full_url: url });
   }
   return out;
+};
+
+/**
+ * Photos: replace from primary (winner). If primary has none, keep secondary.
+ * @deprecated name kept for imports — behavior is replace, not union.
+ */
+export const mergePhotos = (primary, secondary) => {
+  const fromPrimary = normalizePhotos(primary);
+  if (fromPrimary.length) return fromPrimary;
+  return normalizePhotos(secondary);
 };
 
 const datesEqual = (a, b) => toMs(a?.date_start) === toMs(b?.date_start)
@@ -147,8 +158,7 @@ export const unionDatesAndPrices = (existing = {}, incoming = {}) => {
 
 /**
  * Higher/equal priority merge:
- * - priority fields (incl. address, lat/lon) from primary (incoming when equal/newer)
- * - photos always unioned
+ * - priority fields (incl. address, lat/lon, photos) from primary — photos replaced
  * - dates/prices always unioned via holding_date parse↔format
  */
 export const applyPriorityMerge = (existing, incoming, { primaryIsIncoming }) => {
@@ -161,12 +171,20 @@ export const applyPriorityMerge = (existing, incoming, { primaryIsIncoming }) =>
     city_id: existing.city_id || incoming.city_id,
     name: existing.name || incoming.name,
     ...unionDatesAndPrices(existing, incoming),
-    photos: mergePhotos(existing.photos, incoming.photos),
+    photos: mergePhotos(primary.photos, secondary.photos),
   };
 
   for (const field of PRIORITY_FIELDS) {
+    if (field === 'photos') continue; // already set via mergePhotos (replace)
     const v = primary[field];
     if (v == null || v === '') continue;
+    // Don't overwrite a real specialization with placeholder "Event"
+    if (field === 'specialization' && (v === 'Event' || /^none$/i.test(String(v)))) {
+      if (secondary.specialization && secondary.specialization !== 'Event') {
+        next.specialization = secondary.specialization;
+        continue;
+      }
+    }
     next[field] = v;
   }
 
@@ -175,6 +193,18 @@ export const applyPriorityMerge = (existing, incoming, { primaryIsIncoming }) =>
   if (primary.lon == null && secondary.lon != null) next.lon = secondary.lon;
   if (primary.is_special_point_on_map == null && secondary.is_special_point_on_map != null) {
     next.is_special_point_on_map = secondary.is_special_point_on_map;
+  }
+
+  if (!next.specialization || next.specialization === 'Event' || /^none$/i.test(String(next.specialization))) {
+    next.specialization = secondary.specialization && secondary.specialization !== 'Event'
+      ? secondary.specialization
+      : next.specialization;
+  }
+  if (/^none$/i.test(String(next.specialization || ''))) {
+    next.specialization = 'Другое';
+  }
+  if (next.category_resolved_by === 'none' || next.category_resolved_by === 'None') {
+    next.category_resolved_by = 'other';
   }
 
   next.parser_unique_id = existing.parser_unique_id || incoming.parser_unique_id || null;

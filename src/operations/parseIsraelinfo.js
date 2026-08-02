@@ -12,6 +12,8 @@ import saveProcessedEvents from '../helpers/saveProcessedEvents';
 import { logParseRun } from '../helpers/logParseRun';
 import { createLoggerWithSource } from '../helpers/logger';
 import createCitySuggestionCollector from '../helpers/createCitySuggestionCollector';
+import { formatHoldingDate } from '../helpers/holdingDate';
+import { parseIsraelinfoDatesFromText } from '../helpers/israelinfoDates';
 
 const logger = createLoggerWithSource('PARSE_ISRAELINFO');
 
@@ -107,20 +109,7 @@ const extractImg = (html = '') => {
   return upgradeBravoImageUrl(m[1]);
 };
 
-const parseDatesFromText = (text = '') => {
-  const dates = [];
-    const block = text.match(/Дат[аы]\s*:\s*([^\n.]+?)(?:\s+Город|$)/i);
-  const src = block ? block[1] : text;
-  const re = /(\d{1,2})[./](\d{1,2})[./](\d{2,4})/g;
-  let m;
-  while ((m = re.exec(src))) {
-    let year = Number(m[3]);
-    if (year < 100) year += 2000;
-    const d = moment(`${year}-${m[2].padStart(2, '0')}-${m[1].padStart(2, '0')}`, 'YYYY-MM-DD', true);
-    if (d.isValid()) dates.push(d.toDate());
-  }
-  return dates;
-};
+const parseDatesFromText = parseIsraelinfoDatesFromText;
 
 const parseCitiesFromText = (text = '') => {
   const m = text.match(/Город[аы]?\s*:\s*([^\n]+?)(?:\s+Купить|\s+билеты|$)/i);
@@ -442,13 +431,8 @@ async function parseIsraelinfo({ meta = {}, runId }) {
         ? new Date(Math.max(...dates.map((d) => d.getTime())))
         : null;
 
-      const holding = dates.length
-        ? dates
-          .slice()
-          .sort((a, b) => a - b)
-          .map((d) => moment(d).format('DD.MM.YYYY'))
-          .join(', ')
-        : '';
+      // Consecutive days → "2–29 августа 2026"; separate days → comma list
+      const holding = dates.length ? formatHoldingDate(dates) : '';
 
       const newEvent = {
         name: item.title || 'Event',

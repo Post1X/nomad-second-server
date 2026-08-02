@@ -129,6 +129,23 @@ export async function saveProcessedEvents({
         source: winnerSource,
         parser_unique_id: parserUniqueId,
       });
+      if (eventData.category_resolved_by === 'none'
+        || eventData.category_resolved_by === 'None'
+        || eventData.category_resolved_by === 'default_other') {
+        eventData.category_resolved_by = 'other';
+      }
+      if (!eventData.specialization || eventData.specialization === 'Event'
+        || /^none$/i.test(String(eventData.specialization))) {
+        if (eventData.events_category_id) {
+          // eslint-disable-next-line no-await-in-loop
+          const EventsCategoriesSchema = (await import('../schemas/EventsCategoriesSchema')).default;
+          // eslint-disable-next-line no-await-in-loop
+          const cat = await EventsCategoriesSchema.findById(eventData.events_category_id).lean();
+          eventData.specialization = cat?.name && !/^none$/i.test(cat.name) ? cat.name : 'Другое';
+        } else {
+          eventData.specialization = 'Другое';
+        }
+      }
 
       // eslint-disable-next-line no-await-in-loop
       await ParsedEventsSchema.updateOne(

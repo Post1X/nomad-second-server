@@ -126,10 +126,10 @@ class BackfillStatsServices {
         const s = bySource[src];
         s.total += 1;
         totals.total += 1;
-        bump(s.byResolvedBy, row.resolved_by || 'none');
-        bump(totals.byResolvedBy, row.resolved_by || 'none');
+        bump(s.byResolvedBy, row.resolved_by || 'other');
+        bump(totals.byResolvedBy, row.resolved_by || 'other');
 
-        if (row.resolved_by === 'default_other' || !row.category_id) {
+        if (row.resolved_by === 'default_other' || row.resolved_by === 'other' || !row.category_id) {
           s.noCategory += 1;
           s.noCategoryAfterAi += 1;
           totals.noCategory += 1;

@@ -55,17 +55,33 @@ export async function categorizeNewEvent(event, source) {
     } else {
       const otherId = await getOtherCategoryId();
       event.events_category_id = otherId;
-      event.category_resolved_by = 'default_other';
+      // "other" (not none / default_other) — main may still accept default_other via pull mapping
+      event.category_resolved_by = 'other';
       event.category_ai_failed = true;
       if (suggested) event.category_suggested_name = suggested;
       stats.noCategoryAfterAi = 1;
     }
   }
 
-  if (!event.specialization || event.specialization === 'Event') {
+  if (event.category_resolved_by === 'none' || event.category_resolved_by === 'None') {
+    event.category_resolved_by = 'other';
+  }
+  if (event.category_resolved_by === 'default_other') {
+    event.category_resolved_by = 'other';
+  }
+
+  // specialization: if placeholder / missing → category name (all sources)
+  const spec = String(event.specialization || '').trim();
+  if (!spec || spec === 'Event' || /^none$/i.test(spec)) {
     if (event.events_category_id) {
       const cat = await EventsCategoriesSchema.findById(event.events_category_id).lean();
-      if (cat?.name) event.specialization = cat.name;
+      if (cat?.name) {
+        event.specialization = /^none$/i.test(cat.name) ? 'Другое' : cat.name;
+      } else {
+        event.specialization = 'Другое';
+      }
+    } else {
+      event.specialization = 'Другое';
     }
   }
 

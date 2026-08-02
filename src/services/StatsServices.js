@@ -105,9 +105,13 @@ class StatsServices {
         const e = pe.event_data || {};
         bump(byCountry, e.country_id ? String(e.country_id) : null);
         bump(byCity, e.city_id ? String(e.city_id) : null);
-        bump(byResolvedBy, e.category_resolved_by || 'none');
+        let resolvedBy = e.category_resolved_by || 'other';
+        if (resolvedBy === 'none' || resolvedBy === 'None' || resolvedBy === 'default_other') {
+          resolvedBy = 'other';
+        }
+        bump(byResolvedBy, resolvedBy);
 
-        if (e.category_resolved_by === 'default_other') {
+        if (e.category_resolved_by === 'default_other' || e.category_resolved_by === 'other') {
           noCategory += 1;
           noCategoryAfterAi += 1;
           bump(byCategory, e.events_category_id ? String(e.events_category_id) : 'other');
