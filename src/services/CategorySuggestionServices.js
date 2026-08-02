@@ -3,7 +3,10 @@ import EventsCategoriesSchema from '../schemas/EventsCategoriesSchema';
 import SettingsSchema from '../schemas/SettingsSchema';
 import { ENV, SETTINGS_KEYS } from '../helpers/constants';
 import { buildCategoryKeywords } from '../helpers/buildCategoryKeywords';
-import { exampleFitsCategory } from '../helpers/exampleFitsCategory';
+import {
+  exampleFitsCategory,
+  filterExamplesForCategory,
+} from '../helpers/exampleFitsCategory';
 import { requestJson } from './cityDiscovery/http';
 import { createLoggerWithSource } from '../helpers/logger';
 
@@ -203,17 +206,40 @@ export async function listCategorySuggestions({
       .lean(),
   ]);
 
-  // Legacy pending rows (created before keywords-on-upsert): fill now.
+  // Hydrate keywords + scrub bad examples (concerts stuck under «Фильмы», etc.).
   const hydrated = [];
   for (const item of items) {
-    if (Array.isArray(item.keywords) && item.keywords.length) {
-      hydrated.push(item);
-      continue;
+    const cleanedExamples = filterExamplesForCategory(
+      item.raw_name,
+      item.example_events || [],
+    );
+    const examplesChanged = cleanedExamples.length !== (item.example_events || []).length
+      || cleanedExamples.some((ex, i) => ex !== (item.example_events || [])[i]);
+
+    let keywords = item.keywords;
+    const needKeywords = !Array.isArray(keywords) || !keywords.length;
+    if (needKeywords) {
+      keywords = buildCategoryKeywords(item.raw_name, cleanedExamples);
     }
-    const keywords = buildCategoryKeywords(item.raw_name, item.example_events || []);
-    // eslint-disable-next-line no-await-in-loop
-    await CategorySuggestions.updateOne({ _id: item._id }, { $set: { keywords } });
-    hydrated.push({ ...item, keywords });
+
+    if (examplesChanged || needKeywords) {
+      // eslint-disable-next-line no-await-in-loop
+      await CategorySuggestions.updateOne(
+        { _id: item._id },
+        {
+          $set: {
+            ...(examplesChanged ? { example_events: cleanedExamples } : {}),
+            ...(needKeywords ? { keywords } : {}),
+          },
+        },
+      );
+    }
+
+    hydrated.push({
+      ...item,
+      example_events: cleanedExamples,
+      keywords: keywords || [],
+    });
   }
 
   return {
