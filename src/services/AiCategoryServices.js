@@ -13,7 +13,7 @@ import { createLoggerWithSource } from '../helpers/logger';
 const logger = createLoggerWithSource('AI_CATEGORY');
 
 /** Bump when prompt text / cards change so cached Settings prompt is rebuilt. */
-const AI_CATEGORY_PROMPT_VERSION = `v11-cards-existing-only+${CATEGORY_CARDS_VERSION}`;
+const AI_CATEGORY_PROMPT_VERSION = `v12-address-payload+${CATEGORY_CARDS_VERSION}`;
 
 const NAME_MAX = 120;
 const DESC_MAX = 200;
@@ -147,11 +147,21 @@ const parseAiResults = (content) => {
   }
 };
 
-const eventPayloadLine = (ev) => JSON.stringify({
-  id: ev.tempId,
-  name: (ev.name || '').slice(0, NAME_MAX),
-  description: (ev.description || '').slice(0, DESC_MAX),
-});
+const eventPayloadLine = (ev) => {
+  const name = (ev.name || '').slice(0, NAME_MAX);
+  let description = (ev.description || '').slice(0, DESC_MAX);
+  // Useless when parser copied the title into description
+  if (description && description.trim() === name.trim()) description = '';
+
+  const spec = String(ev.specialization || ev.specialization_name || '').trim();
+  const address = String(ev.address || '').slice(0, 160);
+  const payload = { id: ev.tempId, name };
+  if (description) payload.description = description;
+  // Skip noise like Ticketmaster "Event"
+  if (spec && !/^event$/i.test(spec)) payload.specialization = spec.slice(0, 80);
+  if (address) payload.address = address;
+  return JSON.stringify(payload);
+};
 
 /**
  * Collapse suggestions that are synonyms / near-duplicates of existing categories.

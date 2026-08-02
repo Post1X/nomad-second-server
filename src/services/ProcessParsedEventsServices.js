@@ -53,6 +53,7 @@ export async function processParsedEvents(rawEvents, source) {
         name: ev.name,
         description: ev.description,
         address: ev.address,
+        specialization: ev.specialization,
         source,
         index: i,
       });

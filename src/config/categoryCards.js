@@ -4,7 +4,7 @@
  * Bump CATEGORY_CARDS_VERSION when editing cards so prompt cache rebuilds.
  */
 
-export const CATEGORY_CARDS_VERSION = 'cards-v1';
+export const CATEGORY_CARDS_VERSION = 'cards-v2';
 
 /**
  * @typedef {{ use: string, examples: string[], not: string }} CategoryCard
@@ -42,8 +42,8 @@ const CARDS = {
     not: 'Single concert billed as a tour date (→ Музыка), single exhibition.',
   },
   Семейное: {
-    use: 'Kids / family-oriented events, children shows, family activities.',
-    examples: ['Детский спектакль', "Children's workshop"],
+    use: 'Kids / family-oriented events, children shows, family theatre, Sinterklaas/Pietjes-style kids characters, school holiday shows.',
+    examples: ['Детский спектакль', "Children's workshop", 'DE SPIEKPIETJES (kids show)'],
     not: 'Adult nightlife, 18+ stand-up, regular concerts without kids focus.',
   },
   Искусство: {

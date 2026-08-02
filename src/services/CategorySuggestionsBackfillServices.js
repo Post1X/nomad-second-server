@@ -86,7 +86,9 @@ export async function loadUncategorizedEvents(limit) {
     tempId: crypto.randomUUID(),
     name: d.event_data?.name || '',
     description: d.event_data?.description || '',
-    source: d.source,
+    address: d.event_data?.address || '',
+    specialization: d.event_data?.specialization || '',
+    source: d.source || d.event_data?.source,
   })).filter((e) => e.name);
 }
 
