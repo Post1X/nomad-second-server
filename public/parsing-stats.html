@@ -602,7 +602,9 @@
             <span class="muted mono" id="catBackfillStatus">idle</span>
           </div>
           <div class="muted" style="font-size:0.82rem;margin-bottom:8px">
-            1) вешает только <b>существующие</b> категории · 2) по оставшимся одним проходом предлагает ≤20 новых (с проверенными примерами). Без invent на каждый title.
+            <b>B+A:</b> 1) существующие категории с карточками (use/examples/NOT) ·
+            2) по оставшимся — discovery ≤20 новых (примеры только из того же ответа AI).
+            Invent на каждый title больше нет.
           </div>
           <pre class="run-log" id="catBackfillLog">— нет логов —</pre>
         </div>
@@ -613,13 +615,12 @@
               <label>Max категорий</label><br/>
               <input id="catConsolidateMax" type="number" min="5" max="20" value="20" style="width:90px" />
             </div>
-            <button id="catConsolidateStartBtn" type="button">Свести кандидатов (≤N)</button>
+            <button id="catConsolidateStartBtn" type="button">Discovery кандидатов (≤N)</button>
             <button id="catConsolidateStopBtn" class="danger" type="button" disabled>Стоп</button>
             <span class="muted mono" id="catConsolidateStatus">idle</span>
           </div>
           <div class="muted" style="font-size:0.82rem;margin-bottom:8px">
-            После backfill: AI объединяет сотни мелких pending в ≤N широких русских категорий (Фильмы, Экскурсии…).
-            Мусор отбрасывает. Approve по-прежнему вручную.
+            Только phase2: выборка «Другое» → до N новых категорий с проверенными примерами (pending заменяется).
           </div>
           <pre class="run-log" id="catConsolidateLog">— нет логов —</pre>
         </div>
@@ -1679,7 +1680,7 @@
       });
       renderCatConsolidateJob(data.job);
       startCatConsolidatePoll();
-      toast('Consolidate запущен');
+      toast('Discovery запущен');
     }
 
     async function loadCatCandsTab() {
