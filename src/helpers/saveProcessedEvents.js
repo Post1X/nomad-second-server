@@ -10,7 +10,7 @@ import {
   mergeCrossSourceEvent,
 } from './merge';
 import { SOURCE_PRIORITY, OPERATION_STATUSES } from './constants';
-import { assertParseRunActive, ParseRunCancelledError } from './logParseRun';
+import logParseRun, { assertParseRunActive, ParseRunCancelledError } from './logParseRun';
 import { createLoggerWithSource } from './logger';
 
 const logger = createLoggerWithSource('SAVE_EVENTS');
@@ -38,7 +38,17 @@ export async function saveProcessedEvents({
 }) {
   const parseRunId = runId;
   await assertParseRunActive(parseRunId);
+  await logParseRun(
+    parseRunId,
+    `[${new Date().toISOString()}] Saving: merge/filter ${events?.length || 0} parsed events...`,
+  );
   const { events: processed, stats: processStats } = await processParsedEvents(events || [], source);
+  await logParseRun(
+    parseRunId,
+    `[${new Date().toISOString()}] Saving: upsert ${processed.length} events `
+    + `(afterMerge=${processStats.afterMerge}, skippedNoCity=${processStats.skippedNoCity}, `
+    + `skippedPast=${processStats.skippedPast})`,
+  );
 
   let inserted = 0;
   let updated = 0;
@@ -48,9 +58,26 @@ export async function saveProcessedEvents({
   let categorizedByKeywords = 0;
   let categorizedByAi = 0;
   let noCategoryAfterAi = 0;
+  const openaiUsage = {
+    prompt_tokens: 0,
+    completion_tokens: 0,
+    total_tokens: 0,
+    batches: 0,
+    failedBatches: 0,
+  };
+  const addUsage = (usage) => {
+    if (!usage || typeof usage !== 'object') return;
+    openaiUsage.prompt_tokens += Number(usage.prompt_tokens) || 0;
+    openaiUsage.completion_tokens += Number(usage.completion_tokens) || 0;
+    openaiUsage.total_tokens += Number(usage.total_tokens) || 0;
+    openaiUsage.batches += Number(usage.batches) || 0;
+    openaiUsage.failedBatches += Number(usage.failedBatches) || 0;
+  };
+  const progressEvery = Math.max(25, Math.min(100, Math.ceil(processed.length / 20) || 25));
 
   try {
-    for (const event of processed) {
+    for (let idx = 0; idx < processed.length; idx += 1) {
+      const event = processed[idx];
       // eslint-disable-next-line no-await-in-loop
       await assertParseRunActive(parseRunId);
 
@@ -68,6 +95,7 @@ export async function saveProcessedEvents({
         categorizedByKeywords += catStats.categorizedByKeywords;
         categorizedByAi += catStats.categorizedByAi;
         noCategoryAfterAi += catStats.noCategoryAfterAi;
+        addUsage(catStats.openaiUsage);
 
         const parserUniqueId = categorized.parser_unique_id || newParserUniqueId();
         const eventData = { ...categorized, source, parser_unique_id: parserUniqueId };
@@ -81,6 +109,14 @@ export async function saveProcessedEvents({
           parse_run: parseRunId,
         });
         inserted += 1;
+        if ((idx + 1) % progressEvery === 0 || idx + 1 === processed.length) {
+          // eslint-disable-next-line no-await-in-loop
+          await logParseRun(
+            parseRunId,
+            `[${new Date().toISOString()}] Upsert progress: ${idx + 1}/${processed.length} `
+            + `(insert=${inserted}, update=${updated}, skip=${skipped})`,
+          );
+        }
         continue;
       }
 
@@ -163,6 +199,15 @@ export async function saveProcessedEvents({
         },
       );
       updated += 1;
+
+      if ((idx + 1) % progressEvery === 0 || idx + 1 === processed.length) {
+        // eslint-disable-next-line no-await-in-loop
+        await logParseRun(
+          parseRunId,
+          `[${new Date().toISOString()}] Upsert progress: ${idx + 1}/${processed.length} `
+          + `(insert=${inserted}, update=${updated}, skip=${skipped})`,
+        );
+      }
     }
 
     const upsertStats = {
@@ -174,10 +219,22 @@ export async function saveProcessedEvents({
       categorizedByKeywords,
       categorizedByAi,
       noCategoryAfterAi,
+      openaiUsage,
+    };
+    // UI reads process.kw/ai + openaiUsage; categorization now happens on create in upsert.
+    const processForUi = {
+      ...processStats,
+      categorizedByKeywords,
+      categorizedByAi,
+      noCategoryAfterAi,
+      openaiUsage,
     };
     const additionalInfo = infoTexts.length > 0 ? `\n${infoTexts.join('\n')}` : '';
     const run = await ParseRunsSchema.findById(parseRunId);
-    const finalInfoText = `${run?.infoText || ''}\nSaved: insert=${inserted}, update=${updated}, skip=${skipped}, discardLow=${discardedLowPriority}, cross=${crossMerged}${additionalInfo}`;
+    const tok = openaiUsage.total_tokens
+      ? `, openai=${openaiUsage.total_tokens} tok (ai=${categorizedByAi}, kw=${categorizedByKeywords})`
+      : `, cat kw=${categorizedByKeywords} ai=${categorizedByAi}`;
+    const finalInfoText = `${run?.infoText || ''}\nSaved: insert=${inserted}, update=${updated}, skip=${skipped}, discardLow=${discardedLowPriority}, cross=${crossMerged}${tok}${additionalInfo}`;
 
     await ParseRunsSchema.findByIdAndUpdate(parseRunId, {
       status: OPERATION_STATUSES.success,
@@ -186,7 +243,8 @@ export async function saveProcessedEvents({
         total: processed.length,
         upsert: upsertStats,
         errors: errorTexts.length,
-        process: processStats,
+        process: processForUi,
+        openaiUsage,
         ...extraStatistics,
       }),
       errorText: errorTexts.join('\n'),
@@ -194,7 +252,7 @@ export async function saveProcessedEvents({
     });
 
     logger.info(`Upserted events for run ${parseRunId}: ${JSON.stringify(upsertStats)}`);
-    return { processed, processStats, upsertStats };
+    return { processed, processStats: processForUi, upsertStats };
   } catch (error) {
     if (error instanceof ParseRunCancelledError || error?.cancelled) {
       throw error;

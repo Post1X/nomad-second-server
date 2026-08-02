@@ -1108,14 +1108,17 @@
               const st = parseStatsJson(r.statistics);
               const up = st.upsert || {};
               const pr = st.process || {};
-              const ai = pr.openaiUsage || st.openaiUsage || {};
+              const kw = pr.categorizedByKeywords ?? up.categorizedByKeywords ?? 0;
+              const aiN = pr.categorizedByAi ?? up.categorizedByAi ?? 0;
+              const otherN = pr.noCategoryAfterAi ?? up.noCategoryAfterAi ?? 0;
+              const ai = pr.openaiUsage || up.openaiUsage || st.openaiUsage || {};
               const active = state.selectedRunId === id ? ' active' : '';
               return `<tr class="run-row${active}" data-run-id="${escapeHtml(id)}">
                 <td class="mono">${escapeHtml(new Date(r.createdAt || r.startedAt).toISOString())}</td>
                 <td>${escapeHtml(r.source)}</td>
                 <td><span class="status ${escapeHtml(r.status || '')}">${escapeHtml(r.status || '—')}</span></td>
                 <td class="mono">i${up.inserted || 0}/u${up.updated || 0}/s${up.skipped || 0}</td>
-                <td class="mono">kw${pr.categorizedByKeywords || 0} ai${pr.categorizedByAi || 0} other${pr.noCategoryAfterAi || 0} city∅${pr.noCity || 0}</td>
+                <td class="mono">kw${kw} ai${aiN} other${otherN} city∅${pr.noCity || 0}</td>
                 <td class="mono">${ai.total_tokens != null ? ai.total_tokens + ' tok' : '—'}</td>
                 <td class="mono" style="max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${escapeHtml(r.errorText || '')}">${escapeHtml((r.errorText || '').slice(0, 80) || '—')}</td>
               </tr>`;

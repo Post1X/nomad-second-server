@@ -460,11 +460,16 @@ async function parseEventim({ meta = {}, runId }) {
 
   let citySuggestionStats = null;
   try {
+    await logProgress(parseRunId, 'Flushing city suggestions...');
     citySuggestionStats = await citySuggestions.flush();
     if (citySuggestionStats.candidatesSeen > 0) {
       infoTexts.push(
         `CitySuggestions: +${citySuggestionStats.created} new, ${citySuggestionStats.updated} updated, `
         + `${citySuggestionStats.alreadyInDb} already in DB`,
+      );
+      await logProgress(
+        parseRunId,
+        `CitySuggestions: +${citySuggestionStats.created} new, ${citySuggestionStats.updated} updated`,
       );
     }
   } catch (e) {
@@ -472,6 +477,7 @@ async function parseEventim({ meta = {}, runId }) {
   }
 
   try {
+    await logProgress(parseRunId, `Saving ${events.length} events to database...`);
     await saveProcessedEvents({
       runId: parseRunId,
       events,

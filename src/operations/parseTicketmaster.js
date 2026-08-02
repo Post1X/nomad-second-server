@@ -21,6 +21,10 @@ const logger = createLoggerWithSource('PARSE_TICKETMASTER');
 const DISCOVERY_BASE = 'https://app.ticketmaster.com/discovery/v2';
 const PAGE_SIZE = 200;
 const REQUEST_DELAY_MS = 250;
+/** Abort hung Discovery sockets (TR hang had no timeout). */
+const REQUEST_TIMEOUT_MS = 30000;
+/** Retries for timeout / 429 / 5xx so a flaky country (e.g. TR) is not just skipped. */
+const REQUEST_RETRIES = 4;
 /** Ticketmaster: (page * size) must be < 1000 */
 const TM_MAX_PAGE_OFFSET = 1000;
 
@@ -151,8 +155,8 @@ const formatStartDateTime = (date) => date.toISOString().replace(/\.\d{3}Z$/, 'Z
 
 const getMaxPageIndex = (size) => Math.floor((TM_MAX_PAGE_OFFSET - 1) / size);
 
-const fetchJson = (url) => new Promise((resolve, reject) => {
-  https.get(url, (res) => {
+const fetchJson = (url, { timeoutMs = REQUEST_TIMEOUT_MS } = {}) => new Promise((resolve, reject) => {
+  const req = https.get(url, (res) => {
     let body = '';
     res.on('data', (chunk) => { body += chunk; });
     res.on('end', () => {
@@ -166,8 +170,52 @@ const fetchJson = (url) => new Promise((resolve, reject) => {
         reject(new Error(`Invalid JSON from Ticketmaster: ${e.message}`));
       }
     });
-  }).on('error', reject);
+  });
+  req.setTimeout(timeoutMs, () => {
+    req.destroy(new Error(`Ticketmaster API timeout after ${timeoutMs}ms`));
+  });
+  req.on('error', reject);
 });
+
+const isRetryableTmError = (err) => {
+  const msg = String(err?.message || err || '');
+  if (/timeout/i.test(msg)) return true;
+  if (/ECONNRESET|ETIMEDOUT|EAI_AGAIN|ENOTFOUND|socket hang up/i.test(msg)) return true;
+  if (/HTTP 429/.test(msg)) return true;
+  if (/HTTP 5\d\d/.test(msg)) return true;
+  return false;
+};
+
+const fetchJsonWithRetry = async (
+  url,
+  {
+    timeoutMs = REQUEST_TIMEOUT_MS,
+    retries = REQUEST_RETRIES,
+    parseRunId,
+    label = 'TM',
+  } = {},
+) => {
+  let lastErr;
+  for (let attempt = 1; attempt <= retries; attempt += 1) {
+    try {
+      // eslint-disable-next-line no-await-in-loop
+      return await fetchJson(url, { timeoutMs });
+    } catch (err) {
+      lastErr = err;
+      if (!isRetryableTmError(err) || attempt >= retries) throw err;
+      const delay = Math.min(20000, 1000 * (2 ** (attempt - 1)));
+      const msg = `${label} retry ${attempt}/${retries - 1} after ${err.message} (wait ${delay}ms)`;
+      logger.warn(msg);
+      if (parseRunId) {
+        // eslint-disable-next-line no-await-in-loop
+        await logParseRun(parseRunId, `[${new Date().toISOString()}] ${msg}`);
+      }
+      // eslint-disable-next-line no-await-in-loop
+      await sleep(delay);
+    }
+  }
+  throw lastErr;
+};
 
 const loadCities = async () => {
   if (citiesCache.list) return citiesCache.list;
@@ -228,6 +276,7 @@ const parseEventsForCountry = async ({
   maxPages,
   skippedByCity,
   citySuggestions,
+  parseRunId,
 }) => {
   const events = [];
   let skippedNoVenue = 0;
@@ -250,14 +299,27 @@ const parseEventsForCountry = async ({
   let cursorStart = startFrom;
   let hasMoreWindows = true;
   let pagesFetched = 0;
+  let windowIndex = 0;
+  const maxWindows = 80; // safety against date-cursor spin
 
   while (hasMoreWindows) {
+    if (windowIndex >= maxWindows) {
+      throw new Error(
+        `${countryCode}: aborted after ${maxWindows} date windows `
+        + `(unique=${seenEventIds.size}, pages=${pagesFetched})`,
+      );
+    }
+    windowIndex += 1;
     let page = 0;
     let totalPages = 1;
     let lastBatchLastDate = null;
     let hitPageLimit = false;
 
     while (page < totalPages) {
+      if (parseRunId) {
+        // eslint-disable-next-line no-await-in-loop
+        await assertParseRunActive(parseRunId);
+      }
       if (typeof maxPages === 'number' && pagesFetched >= maxPages) {
         hasMoreWindows = false;
         break;
@@ -278,11 +340,25 @@ const parseEventsForCountry = async ({
 
       const url = `${DISCOVERY_BASE}/events.json?${params.toString()}`;
       // eslint-disable-next-line no-await-in-loop
-      const data = await fetchJson(url);
+      const data = await fetchJsonWithRetry(url, {
+        parseRunId,
+        label: `${countryCode} p${page}`,
+      });
       const pageInfo = data.page || {};
       totalPages = pageInfo.totalPages ?? 1;
+      const totalElements = pageInfo.totalElements ?? 0;
 
       const batch = data._embedded?.events || [];
+
+      if (parseRunId) {
+        // eslint-disable-next-line no-await-in-loop
+        await logParseRun(
+          parseRunId,
+          `[${new Date().toISOString()}] ${countryCode} window ${windowIndex} `
+          + `page ${page + 1}/${totalPages} (size=${batch.length}, total~${totalElements}, `
+          + `kept=${events.length}, unique=${seenEventIds.size})`,
+        );
+      }
 
       for (const event of batch) {
         if (seenEventIds.has(event.id)) continue;
@@ -384,7 +460,22 @@ const parseEventsForCountry = async ({
     if (!hasMoreWindows) break;
 
     if (hitPageLimit && page < totalPages && lastBatchLastDate) {
-      cursorStart = formatStartDateTime(new Date(lastBatchLastDate.getTime() + 1000));
+      const nextCursor = formatStartDateTime(new Date(lastBatchLastDate.getTime() + 1000));
+      if (nextCursor <= cursorStart) {
+        throw new Error(
+          `${countryCode}: date cursor did not advance `
+          + `(cursor=${cursorStart}, lastDate=${lastBatchLastDate.toISOString()})`,
+        );
+      }
+      cursorStart = nextCursor;
+      if (parseRunId) {
+        // eslint-disable-next-line no-await-in-loop
+        await logParseRun(
+          parseRunId,
+          `[${new Date().toISOString()}] ${countryCode} advance window → ${cursorStart} `
+          + `(kept=${events.length})`,
+        );
+      }
       // eslint-disable-next-line no-await-in-loop
       await sleep(REQUEST_DELAY_MS);
       continue;
@@ -458,6 +549,7 @@ async function parseTicketmaster({ meta = {}, runId }) {
           maxPages,
           skippedByCity,
           citySuggestions,
+          parseRunId,
         });
 
         events.push(...result.events);
@@ -466,12 +558,21 @@ async function parseTicketmaster({ meta = {}, runId }) {
         skippedThinDescription += result.skippedThinDescription || 0;
         parsedByCountry[countryCode] = result.events.length;
         countriesProcessed += 1;
+        // eslint-disable-next-line no-await-in-loop
+        await logParseRun(
+          parseRunId,
+          `[${new Date().toISOString()}] Country ${countryCode} done: `
+          + `${result.events.length} kept `
+          + `(noCity=${result.skippedNoCity}, thinDesc=${result.skippedThinDescription || 0})`,
+        );
       } catch (countryError) {
         if (countryError?.cancelled) throw countryError;
         const msg = `${countryCode}: ${countryError?.message || countryError}`;
         errorTexts.push(msg);
         logger.error(msg);
         parsedByCountry[countryCode] = 0;
+        // eslint-disable-next-line no-await-in-loop
+        await logParseRun(parseRunId, `[${new Date().toISOString()}] Country ${countryCode} ERROR: ${msg}`);
       }
 
       // eslint-disable-next-line no-await-in-loop
