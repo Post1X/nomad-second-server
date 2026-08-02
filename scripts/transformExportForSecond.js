@@ -9,6 +9,9 @@
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
+const moment = require('moment');
+
+moment.locale('ru');
 
 const IN = process.env.IN
   || path.resolve(__dirname, '../tmp/main-to-second-export.json');
@@ -39,15 +42,28 @@ const MONTHS_RU = {
 };
 
 const uniqueSortedDays = (dates) => {
-  const map = new Map();
-  for (const d of dates) {
-    const x = d instanceof Date ? d : new Date(d);
-    if (Number.isNaN(x.getTime())) continue;
-    const key = `${x.getUTCFullYear()}-${x.getUTCMonth()}-${x.getUTCDate()}`;
-    if (!map.has(key)) map.set(key, new Date(Date.UTC(x.getUTCFullYear(), x.getUTCMonth(), x.getUTCDate())));
+  const valid = (dates || [])
+    .map((d) => (d instanceof Date ? d : new Date(d)))
+    .filter((d) => !Number.isNaN(d.getTime()))
+    .sort((a, b) => a.getTime() - b.getTime());
+  const unique = [];
+  const seen = new Set();
+  for (const d of valid) {
+    const key = moment(d).format('YYYY-MM-DD');
+    if (seen.has(key)) continue;
+    seen.add(key);
+    unique.push(new Date(d.getFullYear(), d.getMonth(), d.getDate()));
   }
-  return [...map.values()].sort((a, b) => a - b);
+  return unique;
 };
+
+/** Same as parseIsraelinfo cleanFeedDescription — strip feed meta lines. */
+const cleanFeedDescription = (text = '') => String(text || '')
+  .replace(/\s*Дат[аы]\s*:\s*.*$/i, ' ')
+  .replace(/\s*Город[аы]?\s*:\s*.*$/i, ' ')
+  .replace(/\s*Купить билеты[:\s].*$/i, ' ')
+  .replace(/\s+/g, ' ')
+  .trim();
 
 const parseHoldingDate = (str = '') => {
   const out = [];
@@ -83,37 +99,62 @@ const parseHoldingDate = (str = '') => {
   return uniqueSortedDays(out);
 };
 
-const formatHoldingDate = (dates) => {
-  const days = uniqueSortedDays(dates);
-  if (!days.length) return '';
-  // simple: list DD.MM.YYYY, collapse consecutive with –
-  const parts = [];
-  let runStart = days[0];
-  let runEnd = days[0];
-  const fmt = (d) => {
-    const dd = String(d.getUTCDate()).padStart(2, '0');
-    const mm = String(d.getUTCMonth() + 1).padStart(2, '0');
-    return `${dd}.${mm}.${d.getUTCFullYear()}`;
-  };
+const formatDayRanges = (dayNumbers) => {
+  if (!dayNumbers?.length) return '';
+  const numbers = dayNumbers.map((n) => parseInt(n, 10)).filter((n) => !Number.isNaN(n));
+  if (!numbers.length) return dayNumbers.join(', ');
+  const result = [];
+  let start = numbers[0];
+  let end = numbers[0];
   const flush = () => {
-    if (runStart.getTime() === runEnd.getTime()) parts.push(fmt(runStart));
-    else parts.push(`${fmt(runStart)}–${fmt(runEnd)}`); // consecutive → dash
+    if (end === start) result.push(String(start));
+    else result.push(`${start}–${end}`);
   };
-  for (let i = 1; i < days.length; i += 1) {
-    const prev = runEnd;
-    const cur = days[i];
-    const nextDay = new Date(prev);
-    nextDay.setUTCDate(nextDay.getUTCDate() + 1);
-    if (cur.getTime() === nextDay.getTime()) {
-      runEnd = cur;
-    } else {
+  for (let i = 1; i < numbers.length; i += 1) {
+    if (numbers[i] === end + 1) end = numbers[i];
+    else {
       flush();
-      runStart = cur;
-      runEnd = cur;
+      start = end = numbers[i];
     }
   }
   flush();
-  return parts.join(', ');
+  return result.join(', ');
+};
+
+/** Same display rules as src/helpers/holdingDate.js formatHoldingDate. */
+const formatHoldingDate = (dates) => {
+  const uniqueDays = uniqueSortedDays(dates);
+  if (!uniqueDays.length) return '';
+  if (uniqueDays.length === 1) return moment(uniqueDays[0]).format('D MMMM YYYY');
+
+  const years = [...new Set(uniqueDays.map((d) => d.getFullYear()))];
+  const multiYear = years.length > 1;
+  const byMonth = new Map();
+  for (const d of uniqueDays) {
+    const k = `${d.getFullYear()}-${d.getMonth()}`;
+    if (!byMonth.has(k)) byMonth.set(k, []);
+    byMonth.get(k).push(d);
+  }
+
+  const parts = [];
+  for (const [, arr] of byMonth) {
+    arr.sort((a, b) => a.getTime() - b.getTime());
+    const m = moment(arr[0]);
+    const withYear = multiYear ? ' YYYY' : '';
+    const consecutive = arr.length >= 2
+      && arr.every((d, i) => i === 0 || d.getDate() === arr[i - 1].getDate() + 1);
+    if (consecutive) {
+      parts.push(
+        `${moment(arr[0]).format('D')}–${moment(arr[arr.length - 1]).format('D')} `
+        + `${m.format(`MMMM${withYear}`)}`,
+      );
+    } else {
+      parts.push(`${formatDayRanges(arr.map((d) => moment(d).format('D')))} ${m.format(`MMMM${withYear}`)}`);
+    }
+  }
+  const result = parts.join(', ');
+  if (!multiYear && years[0] != null) return `${result} ${years[0]}`;
+  return result;
 };
 
 /** Same rules as src/helpers/israelinfoDates.js (kept inline for plain node). */
@@ -124,8 +165,12 @@ const parseIsraelinfoDatesFromText = (text = '') => {
   const toDate = (d, m, yRaw) => {
     let year = Number(yRaw);
     if (year < 100) year += 2000;
-    const dt = new Date(Date.UTC(year, Number(m) - 1, Number(d)));
-    return Number.isNaN(dt.getTime()) ? null : dt;
+    const dt = moment(
+      `${year}-${String(m).padStart(2, '0')}-${String(d).padStart(2, '0')}`,
+      'YYYY-MM-DD',
+      true,
+    );
+    return dt.isValid() ? dt.toDate() : null;
   };
   const rangeRe = /(\d{1,2})[./](\d{1,2})[./](\d{2,4})\s*[–-]\s*(\d{1,2})[./](\d{1,2})[./](\d{2,4})/g;
   let rm;
@@ -307,11 +352,15 @@ function main() {
       ed.category_resolved_by = 'other';
     }
 
+    // Parse dates from raw description first, then strip feed meta (Даты/Города/…).
     const dates = collectDates(ed);
     if (dates.length) {
       ed.date_start = dates[0];
       ed.date_end = dates[dates.length - 1];
       ed.holding_date = formatHoldingDate(dates);
+    }
+    if (ed.description) {
+      ed.description = cleanFeedDescription(ed.description) || ed.description;
     }
 
     const catName = ed.events_category_id ? catMap[String(ed.events_category_id)] : null;
@@ -405,6 +454,7 @@ function main() {
       source: it.source,
       name_key: it.name_key,
       holding_date: it.event_data.holding_date,
+      desc_has_dates_meta: /Дат[аы]\s*:/i.test(String(it.event_data.description || '')),
       puid: it.parser_unique_id,
       has_tm: Object.prototype.hasOwnProperty.call(it.event_data, 'ticketmaster_id'),
       has_fp: Object.prototype.hasOwnProperty.call(it, 'fingerprint'),

@@ -468,7 +468,7 @@
             <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
               <button id="cronStopBtn" class="danger secondary" type="button">Выкл все parsers</button>
               <button id="cronStartBtn" class="ok secondary" type="button">Вкл все</button>
-              <button type="button" class="danger" id="parseStopActiveBtn" disabled>Стоп активный run</button>
+              <button type="button" class="danger" id="parseStopActiveBtn">Стоп активный run</button>
             </div>
           </div>
           <div id="cronJobsTable" style="margin-top:12px"></div>
@@ -1236,6 +1236,21 @@
       const data = await api(`/parsing/runs?${qs}`);
       state.runs = data.runs || [];
       renderRuns(state.runs);
+
+      // Attach stop/poll to newest in-progress run (cron / other tab / page reload).
+      const active = (state.runs || []).find((r) => (
+        r && !['success', 'error', 'cancelled'].includes(r.status)
+      ));
+      if (active?._id) {
+        const id = String(active._id);
+        if (state.activeParseRunId !== id || !state.parsePollTimer) {
+          startParsePoll(id);
+        } else {
+          setActiveParseUi(id, active.source, active.status);
+        }
+      } else if (!state.parsePollTimer) {
+        setActiveParseUi(null);
+      }
     }
 
     function renderCronStatus(cron) {
@@ -1312,8 +1327,9 @@
       $('parseActiveLabel').textContent = runId
         ? `Активный run: ${source || '—'} · ${status || '…'} · ${runId}`
         : 'Активный run: —';
-      $('parseStopActiveBtn').disabled = !runId
-        || ['success', 'error', 'cancelled'].includes(status);
+      // Keep clickable: click handler re-fetches runs if this tab never started the parse.
+      const finished = ['success', 'error', 'cancelled'].includes(status);
+      $('parseStopActiveBtn').disabled = Boolean(runId) && finished;
     }
 
     async function refreshActiveParseLog() {
@@ -1922,13 +1938,30 @@
     $('selectNone').onclick = () => document.querySelectorAll('#sources input').forEach((el) => { el.checked = false; });
     $('loadBtn').onclick = () => loadStats().catch((e) => showError(e.message || String(e)));
     $('reloadRuns').onclick = () => loadRuns().catch((e) => showError(e.message || String(e)));
-    $('parseStopActiveBtn').onclick = () => {
-      if (!state.activeParseRunId) return;
-      api(`/parsing/runs/${encodeURIComponent(state.activeParseRunId)}/stop`, {
+    $('parseStopActiveBtn').onclick = async () => {
+      let runId = state.activeParseRunId;
+      if (!runId) {
+        try {
+          await loadRuns();
+        } catch (_) { /* ignore */ }
+        runId = state.activeParseRunId;
+      }
+      if (!runId) {
+        const active = (state.runs || []).find((r) => (
+          r && !['success', 'error', 'cancelled'].includes(r.status)
+        ));
+        runId = active?._id ? String(active._id) : null;
+      }
+      if (!runId) {
+        toast('Нет активного run', false);
+        return;
+      }
+      api(`/parsing/runs/${encodeURIComponent(runId)}/stop`, {
         method: 'POST',
         body: '{}',
       }).then(() => {
         toast('Stop запрошен — дождётся следующей контрольной точки');
+        startParsePoll(runId);
         refreshActiveParseLog().catch(() => {});
       }).catch((e) => toast(e.message || String(e), false));
     };
