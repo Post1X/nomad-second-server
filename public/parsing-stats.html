@@ -598,6 +598,7 @@
               Применить категорию на события
             </label>
             <button id="catBackfillStartBtn" class="ok" type="button">Запустить AI backfill</button>
+            <button id="catBackfillStopBtn" class="danger" type="button" disabled>Стоп</button>
             <span class="muted mono" id="catBackfillStatus">idle</span>
           </div>
           <div class="muted" style="font-size:0.82rem;margin-bottom:8px">
@@ -612,11 +613,13 @@
               <label>Max категорий</label><br/>
               <input id="catConsolidateMax" type="number" min="5" max="20" value="20" style="width:90px" />
             </div>
-            <button id="catConsolidateStartBtn" type="button">Схлопнуть до 15–20</button>
+            <button id="catConsolidateStartBtn" type="button">Свести кандидатов (≤N)</button>
+            <button id="catConsolidateStopBtn" class="danger" type="button" disabled>Стоп</button>
             <span class="muted mono" id="catConsolidateStatus">idle</span>
           </div>
           <div class="muted" style="font-size:0.82rem;margin-bottom:8px">
-            AI сводит все pending-кандидаты к ≤N широким русским категориям (мусор отбрасывает). После — Approve вручную.
+            После backfill: AI объединяет сотни мелких pending в ≤N широких русских категорий (Фильмы, Экскурсии…).
+            Мусор отбрасывает. Approve по-прежнему вручную.
           </div>
           <pre class="run-log" id="catConsolidateLog">— нет логов —</pre>
         </div>
@@ -1515,9 +1518,11 @@
       const running = Boolean(j.running);
       const statusEl = $('catBackfillStatus');
       const btn = $('catBackfillStartBtn');
+      const stopBtn = $('catBackfillStopBtn');
       const logEl = $('catBackfillLog');
+      stopBtn.disabled = !running || Boolean(j.cancelRequested);
       if (running) {
-        statusEl.textContent = 'running…';
+        statusEl.textContent = j.cancelRequested ? 'stopping…' : 'running…';
         statusEl.style.color = 'var(--warn)';
         btn.disabled = true;
       } else if (j.error) {
@@ -1525,7 +1530,7 @@
         statusEl.style.color = 'var(--danger)';
         btn.disabled = false;
       } else if (j.finishedAt) {
-        statusEl.textContent = 'done';
+        statusEl.textContent = j.result?.stopped ? 'stopped' : 'done';
         statusEl.style.color = 'var(--accent2)';
         btn.disabled = false;
       } else {
@@ -1599,9 +1604,11 @@
       const running = Boolean(j.running);
       const statusEl = $('catConsolidateStatus');
       const btn = $('catConsolidateStartBtn');
+      const stopBtn = $('catConsolidateStopBtn');
       const logEl = $('catConsolidateLog');
+      stopBtn.disabled = !running || Boolean(j.cancelRequested);
       if (running) {
-        statusEl.textContent = 'running…';
+        statusEl.textContent = j.cancelRequested ? 'stopping…' : 'running…';
         statusEl.style.color = 'var(--warn)';
         btn.disabled = true;
       } else if (j.error) {
@@ -1609,7 +1616,7 @@
         statusEl.style.color = 'var(--danger)';
         btn.disabled = false;
       } else if (j.finishedAt) {
-        statusEl.textContent = 'done';
+        statusEl.textContent = j.result?.stopped ? 'stopped' : 'done';
         statusEl.style.color = 'var(--accent2)';
         btn.disabled = false;
       } else {
@@ -1797,10 +1804,24 @@
       toast(e.message || String(e), false);
       $('catBackfillStartBtn').disabled = false;
     });
+    $('catBackfillStopBtn').onclick = () => api('/parsing/categories/suggestions/backfill/stop', {
+      method: 'POST',
+      body: '{}',
+    }).then((data) => {
+      renderCatBackfillJob(data.job);
+      toast('Stop запрошен — дождётся конца текущего chunk');
+    }).catch((e) => toast(e.message || String(e), false));
     $('catConsolidateStartBtn').onclick = () => startCatConsolidate().catch((e) => {
       toast(e.message || String(e), false);
       $('catConsolidateStartBtn').disabled = false;
     });
+    $('catConsolidateStopBtn').onclick = () => api('/parsing/categories/suggestions/consolidate/stop', {
+      method: 'POST',
+      body: '{}',
+    }).then((data) => {
+      renderCatConsolidateJob(data.job);
+      toast('Stop запрошен');
+    }).catch((e) => toast(e.message || String(e), false));
     $('catCandPrev').onclick = () => {
       if (state.catCandPage <= 1) return;
       state.catCandPage -= 1;

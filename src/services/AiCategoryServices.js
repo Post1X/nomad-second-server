@@ -12,7 +12,7 @@ import { createLoggerWithSource } from '../helpers/logger';
 const logger = createLoggerWithSource('AI_CATEGORY');
 
 /** Bump when prompt text changes so cached Settings prompt is rebuilt. */
-const AI_CATEGORY_PROMPT_VERSION = 'v6-films-en';
+const AI_CATEGORY_PROMPT_VERSION = 'v7-concert-not-film';
 
 const NAME_MAX = 120;
 const DESC_MAX = 200;
@@ -31,12 +31,13 @@ HARD RULES (follow strictly):
 1) ALWAYS assign an existing categoryId if the event is even roughly related by meaning.
    Examples that MUST map to existing (do NOT suggest new names):
    - music / concert / DJ / оркестр / disco / genre names (cumbia, jazz…) → Музыка
+   - artist/band + tour / Golden Circle / ticket upgrade / live show → Музыка (NEVER Фильмы)
    - stand-up / comedy / юмор → Юмор
    - ballet / musical / circus / nutcracker → Шоу/Мюзиклы or Танцы / Театр
    - kids / family / children's show / детский → Семейное
    - exhibition / museum → Выставки or Искусство
    - lecture / talk / мастер-класс → Лекции/Семинары
-   - film / cinema / movie / watch together / screening → Фильмы (if that category exists in the list)
+   - film / cinema / movie / watch together / screening → Фильмы ONLY if it is a cinema screening (title mentions film/cinema/movie/сеанс), not a concert
    - cancelled / postponed / sold out / VIP / premium / elite / friends / fans → null (NOT a category)
 2) Prefer existing over inventing. When in doubt → existing categoryId, suggestedName=null.
 3) suggestedName ONLY for a broad EVENT TYPE missing from the list (e.g. Фильмы, Экскурсии).

@@ -14,6 +14,7 @@ const logger = createLoggerWithSource('CAT_SUGGEST_BACKFILL');
 
 /** @type {null | {
  *  running: boolean,
+ *  cancelRequested: boolean,
  *  startedAt: Date|null,
  *  finishedAt: Date|null,
  *  logs: { t: number, msg: string }[],
@@ -37,6 +38,7 @@ export const getCategorySuggestionsBackfillJob = () => {
   if (!job) {
     return {
       running: false,
+      cancelRequested: false,
       startedAt: null,
       finishedAt: null,
       logs: [],
@@ -46,12 +48,24 @@ export const getCategorySuggestionsBackfillJob = () => {
   }
   return {
     running: job.running,
+    cancelRequested: Boolean(job.cancelRequested),
     startedAt: job.startedAt,
     finishedAt: job.finishedAt,
     logs: job.logs,
     result: job.result,
     error: job.error,
   };
+};
+
+export const stopCategorySuggestionsBackfill = () => {
+  if (!job?.running) {
+    const err = new Error('Backfill is not running');
+    err.status = 409;
+    throw err;
+  }
+  job.cancelRequested = true;
+  pushLog('Stop requested — finishing current chunk, then halt');
+  return getCategorySuggestionsBackfillJob();
 };
 
 async function loadUncategorized(limit) {
@@ -100,6 +114,7 @@ export async function runCategorySuggestionsBackfill(options = {}) {
 
   job = {
     running: true,
+    cancelRequested: false,
     startedAt: new Date(),
     finishedAt: null,
     logs: [],
@@ -109,6 +124,7 @@ export async function runCategorySuggestionsBackfill(options = {}) {
 
   // fire-and-forget
   setImmediate(async () => {
+    let stopped = false;
     try {
       pushLog(
         `Start backfill limit=${limit ?? 'all'} applyCategory=${applyCategory}`
@@ -145,9 +161,16 @@ export async function runCategorySuggestionsBackfill(options = {}) {
       let assignedExisting = 0;
       let suggestedNew = 0;
       let stillNull = 0;
+      let processed = 0;
       const tokensBySuggestion = new Map();
 
       for (let i = 0; i < events.length; i += chunk) {
+        if (job.cancelRequested) {
+          stopped = true;
+          pushLog(`Stopped by user after ${processed}/${events.length} events`);
+          break;
+        }
+
         const batch = events.slice(i, i + chunk);
         const part = `${Math.floor(i / chunk) + 1}/${Math.ceil(events.length / chunk)}`;
         pushLog(`Chunk ${part} (n=${batch.length})…`);
@@ -215,6 +238,8 @@ export async function runCategorySuggestionsBackfill(options = {}) {
           }
         }
 
+        processed += batch.length;
+
         // sample lines
         for (const ev of batch.slice(0, 3)) {
           const catId = map.get(ev.tempId);
@@ -235,7 +260,7 @@ export async function runCategorySuggestionsBackfill(options = {}) {
         : await CategorySuggestions.countDocuments({ status: 'pending' });
 
       job.result = {
-        processed: events.length,
+        processed,
         assignedExisting,
         suggestedNew,
         stillNull,
@@ -243,11 +268,14 @@ export async function runCategorySuggestionsBackfill(options = {}) {
         tokensBySuggestion: sharesSorted,
         pendingSuggestions: pending,
         dryRun,
+        stopped,
       };
 
-      pushLog(`Done. processed=${events.length} existing=${assignedExisting} `
-        + `newSuggestions=${suggestedNew} null=${stillNull}`
-        + `${pending != null ? ` pending=${pending}` : ''}`);
+      pushLog(
+        `${stopped ? 'Stopped' : 'Done'}. processed=${processed}/${events.length}`
+        + ` existing=${assignedExisting} newSuggestions=${suggestedNew} null=${stillNull}`
+        + `${pending != null ? ` pending=${pending}` : ''}`,
+      );
       pushLog(`Tokens total=${usageTotal.total_tokens}`);
       for (const row of sharesSorted.slice(0, 15)) {
         pushLog(`  candidate "${row.name}": events=${row.events} tokens≈${row.tokens}`);
@@ -278,5 +306,6 @@ export async function waitForCategorySuggestionsBackfill(pollMs = 400) {
 export default {
   getCategorySuggestionsBackfillJob,
   runCategorySuggestionsBackfill,
+  stopCategorySuggestionsBackfill,
   waitForCategorySuggestionsBackfill,
 };

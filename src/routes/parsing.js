@@ -38,8 +38,10 @@ router.get('/categories/suggestions', ParsingController.listCategorySuggestions)
 router.get('/categories/suggestions/metrics', ParsingController.categorySuggestionsMetrics);
 router.post('/categories/suggestions/backfill', ParsingController.startCategorySuggestionsBackfill);
 router.get('/categories/suggestions/backfill', ParsingController.getCategorySuggestionsBackfill);
+router.post('/categories/suggestions/backfill/stop', ParsingController.stopCategorySuggestionsBackfill);
 router.post('/categories/suggestions/consolidate', ParsingController.startCategorySuggestionsConsolidate);
 router.get('/categories/suggestions/consolidate', ParsingController.getCategorySuggestionsConsolidate);
+router.post('/categories/suggestions/consolidate/stop', ParsingController.stopCategorySuggestionsConsolidate);
 router.post('/categories/suggestions/:id/approve', ParsingController.approveCategorySuggestion);
 router.post('/categories/suggestions/:id/reject', ParsingController.rejectCategorySuggestion);
 

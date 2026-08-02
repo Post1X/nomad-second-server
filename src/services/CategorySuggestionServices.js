@@ -3,6 +3,7 @@ import EventsCategoriesSchema from '../schemas/EventsCategoriesSchema';
 import SettingsSchema from '../schemas/SettingsSchema';
 import { ENV, SETTINGS_KEYS } from '../helpers/constants';
 import { buildCategoryKeywords } from '../helpers/buildCategoryKeywords';
+import { exampleFitsCategory } from '../helpers/exampleFitsCategory';
 import { requestJson } from './cityDiscovery/http';
 import { createLoggerWithSource } from '../helpers/logger';
 
@@ -97,6 +98,11 @@ export async function upsertCategorySuggestions(items = []) {
       else stats.skippedInvalid += 1;
       continue;
     }
+    // e.g. Imagine Dragons Golden Circle must not feed «Фильмы»
+    if (item.exampleEvent && !exampleFitsCategory(raw, item.exampleEvent)) {
+      stats.skippedInvalid += 1;
+      continue;
+    }
     if (!byKey.has(key)) {
       byKey.set(key, {
         raw_name: raw,
@@ -113,7 +119,9 @@ export async function upsertCategorySuggestions(items = []) {
     if (item.source) row.sources.add(item.source);
     if (item.exampleEvent && row.examples.length < 8) {
       const ex = String(item.exampleEvent).slice(0, 160);
-      if (!row.examples.includes(ex)) row.examples.push(ex);
+      if (!row.examples.includes(ex) && exampleFitsCategory(raw, ex)) {
+        row.examples.push(ex);
+      }
     }
   }
 
@@ -141,7 +149,9 @@ export async function upsertCategorySuggestions(items = []) {
       const examples = [...(existingDoc.example_events || [])];
       for (const ex of row.examples) {
         if (examples.length >= 12) break;
-        if (!examples.includes(ex)) examples.push(ex);
+        if (!examples.includes(ex) && exampleFitsCategory(row.raw_name, ex)) {
+          examples.push(ex);
+        }
       }
       const keywords = buildCategoryKeywords(row.raw_name, examples);
       // eslint-disable-next-line no-await-in-loop

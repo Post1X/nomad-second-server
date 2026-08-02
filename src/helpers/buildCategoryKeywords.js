@@ -11,7 +11,8 @@ const STOP = new Set([
 
 /** Extra EN/RU stems keyed by normalized RU category name. */
 const TOPIC_SYNONYMS = {
-  фильмы: ['фильм', 'кино', 'movie', 'movies', 'cinema', 'film', 'films', 'screening', 'watch party'],
+  // avoid "watch party" alone — too loose; concerts must not match via vague EN stems
+  фильмы: ['фильм', 'кино', 'movie', 'movies', 'cinema', 'film', 'films', 'screening'],
   экскурсии: ['экскурсия', 'tour', 'tours', 'sightseeing', 'guided tour'],
   спорт: ['sport', 'sports', 'match', 'матч'],
   фестивали: ['фестиваль', 'festival', 'festivals'],

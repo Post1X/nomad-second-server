@@ -1,6 +1,7 @@
 import CategorySuggestions from '../schemas/CategorySuggestionsSchema';
 import EventsCategoriesSchema from '../schemas/EventsCategoriesSchema';
 import { buildCategoryKeywords } from '../helpers/buildCategoryKeywords';
+import { exampleFitsCategory } from '../helpers/exampleFitsCategory';
 import { consolidateCategorySuggestionsWithAi } from './AiCategoryServices';
 import {
   normalizeCategoryKey,
@@ -12,6 +13,7 @@ const logger = createLoggerWithSource('CAT_SUGGEST_CONSOLIDATE');
 
 /** @type {null | {
  *  running: boolean,
+ *  cancelRequested: boolean,
  *  startedAt: Date|null,
  *  finishedAt: Date|null,
  *  logs: { t: number, msg: string }[],
@@ -35,6 +37,7 @@ export const getCategorySuggestionsConsolidateJob = () => {
   if (!job) {
     return {
       running: false,
+      cancelRequested: false,
       startedAt: null,
       finishedAt: null,
       logs: [],
@@ -44,12 +47,24 @@ export const getCategorySuggestionsConsolidateJob = () => {
   }
   return {
     running: job.running,
+    cancelRequested: Boolean(job.cancelRequested),
     startedAt: job.startedAt,
     finishedAt: job.finishedAt,
     logs: job.logs,
     result: job.result,
     error: job.error,
   };
+};
+
+export const stopCategorySuggestionsConsolidate = () => {
+  if (!job?.running) {
+    const err = new Error('Consolidate is not running');
+    err.status = 409;
+    throw err;
+  }
+  job.cancelRequested = true;
+  pushLog('Stop requested — will abort before writing DB if still in AI call');
+  return getCategorySuggestionsConsolidateJob();
 };
 
 /**
@@ -67,6 +82,7 @@ export async function runCategorySuggestionsConsolidate(options = {}) {
 
   job = {
     running: true,
+    cancelRequested: false,
     startedAt: new Date(),
     finishedAt: null,
     logs: [],
@@ -91,6 +107,12 @@ export async function runCategorySuggestionsConsolidate(options = {}) {
         return;
       }
 
+      if (job.cancelRequested) {
+        job.result = { before: pending.length, after: pending.length, stopped: true };
+        pushLog('Stopped before OpenAI call — pending unchanged');
+        return;
+      }
+
       const existing = await EventsCategoriesSchema.find({}).select('name').lean();
       const existingNames = existing.map((c) => c.name).filter(Boolean);
       const existingKeys = new Set(
@@ -106,6 +128,15 @@ export async function runCategorySuggestionsConsolidate(options = {}) {
         pending,
         { maxCategories, existingNames },
       );
+
+      if (job.cancelRequested) {
+        job.result = {
+          before: pending.length, after: pending.length, stopped: true, usage,
+        };
+        pushLog('Stopped after OpenAI — DB not rewritten, pending unchanged');
+        return;
+      }
+
       pushLog(`AI returned ${aiCats.length} categories, tokens=${usage?.total_tokens || 0}`);
 
       const kept = [];
@@ -133,7 +164,13 @@ export async function runCategorySuggestionsConsolidate(options = {}) {
             hit_count += doc.hit_count || 1;
             tokens_total += doc.tokens_total || 0;
             for (const ex of doc.example_events || []) {
-              if (examples.length < 12 && !examples.includes(ex)) examples.push(ex);
+              if (
+                examples.length < 12
+                && !examples.includes(ex)
+                && exampleFitsCategory(name, ex)
+              ) {
+                examples.push(ex);
+              }
             }
             for (const s of doc.sources || []) sourcesSet.add(s);
           } else {
@@ -208,4 +245,5 @@ export async function runCategorySuggestionsConsolidate(options = {}) {
 export default {
   getCategorySuggestionsConsolidateJob,
   runCategorySuggestionsConsolidate,
+  stopCategorySuggestionsConsolidate,
 };

@@ -836,6 +836,18 @@ class ParsingController {
     }
   };
 
+  static stopCategorySuggestionsBackfill = async (req, res, next) => {
+    try {
+      const job = CategorySuggestionsBackfillServices.stopCategorySuggestionsBackfill();
+      res.json({ status: 'ok', job });
+    } catch (error) {
+      if (error.status) {
+        return res.status(error.status).json({ status: 'error', message: error.message });
+      }
+      next(error);
+    }
+  };
+
   static startCategorySuggestionsConsolidate = async (req, res, next) => {
     try {
       const body = req.body || {};
@@ -856,6 +868,18 @@ class ParsingController {
       const job = CategorySuggestionsConsolidateServices.getCategorySuggestionsConsolidateJob();
       res.json({ status: 'ok', job });
     } catch (error) {
+      next(error);
+    }
+  };
+
+  static stopCategorySuggestionsConsolidate = async (req, res, next) => {
+    try {
+      const job = CategorySuggestionsConsolidateServices.stopCategorySuggestionsConsolidate();
+      res.json({ status: 'ok', job });
+    } catch (error) {
+      if (error.status) {
+        return res.status(error.status).json({ status: 'error', message: error.message });
+      }
       next(error);
     }
   };
