@@ -18,6 +18,13 @@ export const startOfWeekMondayUtc = (now = new Date()) => {
   return d;
 };
 
+/** Monday 00:00 UTC of the previous week (pull default — includes last week's updates). */
+export const startOfPreviousWeekMondayUtc = (now = new Date()) => {
+  const d = startOfWeekMondayUtc(now);
+  d.setUTCDate(d.getUTCDate() - 7);
+  return d;
+};
+
 export const isEventInPast = (event, now = new Date()) => {
   const cutoff = startOfTodayUtc(now).getTime();
   const end = event?.date_end || event?.date_start;
@@ -48,6 +55,7 @@ export const filterIngestEvents = (events = [], now = new Date()) => {
 export default {
   startOfTodayUtc,
   startOfWeekMondayUtc,
+  startOfPreviousWeekMondayUtc,
   isEventInPast,
   filterIngestEvents,
 };

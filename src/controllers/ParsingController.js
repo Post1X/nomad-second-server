@@ -31,7 +31,7 @@ import {
 } from '../helpers/cron';
 import { requestParseRunStop } from '../helpers/logParseRun';
 import { createLoggerWithSource } from '../helpers/logger';
-import { startOfWeekMondayUtc } from '../helpers/eventFilters';
+import { startOfPreviousWeekMondayUtc } from '../helpers/eventFilters';
 
 const logger = createLoggerWithSource('PARSING_CONTROLLER');
 
@@ -184,12 +184,13 @@ class ParsingController {
       const page = Math.max(1, parseInt(String(pageParam || 1), 10) || 1);
       const per_page = Math.max(1, Math.min(100, parseInt(String(perPageParam || 20), 10) || 20));
 
-      // Pull window: updated_at >= start of current week (Monday UTC), or explicit updatedSince.
+      // Pull window: updatedAt >= previous Monday 00:00 UTC (or explicit updatedSince).
+      // Current-week Monday alone drops Sunday updates when pull runs on Monday.
       // exported_at / onlyPending are deprecated — ignored.
       const filter = { source };
       const since = updatedSince
         ? new Date(updatedSince)
-        : startOfWeekMondayUtc();
+        : startOfPreviousWeekMondayUtc();
       if (!Number.isNaN(since.getTime())) {
         filter.updatedAt = { $gte: since };
       }
