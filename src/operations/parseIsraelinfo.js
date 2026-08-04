@@ -28,6 +28,7 @@ const request = (urlString, {
   headers = {},
   body = null,
   cookieJar = null,
+  maxRedirects = 5,
 } = {}) => new Promise((resolve, reject) => {
   const url = new URL(urlString);
   const isHttps = url.protocol === 'https:';
@@ -49,6 +50,25 @@ const request = (urlString, {
   }
 
   const req = mod.request(opts, (res) => {
+    const status = res.statusCode || 0;
+    const loc = res.headers.location;
+    if ([301, 302, 303, 307, 308].includes(status) && loc && maxRedirects > 0) {
+      // Drain and follow (announce IDs redirect to slug URLs).
+      res.resume();
+      const nextUrl = new URL(loc, url).toString();
+      const nextMethod = (status === 303 || method === 'POST') && status !== 307 && status !== 308
+        ? 'GET'
+        : method;
+      request(nextUrl, {
+        method: nextMethod,
+        headers,
+        body: nextMethod === 'GET' ? null : body,
+        cookieJar,
+        maxRedirects: maxRedirects - 1,
+      }).then(resolve, reject);
+      return;
+    }
+
     const chunks = [];
     res.on('data', (chunk) => chunks.push(chunk));
     res.on('end', () => {
@@ -66,7 +86,7 @@ const request = (urlString, {
         cookieJar.cookieHeader = Object.entries(map).map(([k, v]) => `${k}=${v}`).join('; ');
       }
       resolve({
-        statusCode: res.statusCode || 0,
+        statusCode: status,
         headers: res.headers,
         text,
         buffer: buf,
@@ -177,9 +197,8 @@ const formatVenueAddress = (venues = [], fallbackCity = '') => {
 
   if (venues.length === 1) {
     const v = venues[0];
-    return [v.hall, v.street, !v.hall && !v.street ? v.city : '']
-      .filter(Boolean)
-      .join(', ');
+    // hall + street (+ city when useful)
+    return [v.hall, v.street, v.city].filter(Boolean).join(', ');
   }
 
   // Multi-city tour: unique halls (street makes the string huge / unstable for merge)
