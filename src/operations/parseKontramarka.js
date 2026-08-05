@@ -8,6 +8,7 @@ import saveProcessedEvents from '../helpers/saveProcessedEvents';
 import logParseRun from '../helpers/logParseRun';
 import createCitySuggestionCollector from '../helpers/createCitySuggestionCollector';
 import findCityInDb from '../helpers/cityMatching';
+import discoverKontramarkaCities from '../services/cityDiscovery/discoverKontramarka';
 
 const logger = createLoggerWithSource('PARSE_KONTRAMARKA');
 
@@ -37,10 +38,66 @@ const parseCoordinatesField = (coord) => {
   return null;
 };
 
+/** Site slugs are Latin (muenchen, koeln) — never encode Cyrillic city names into the URL. */
 const buildCitySlug = (name = '') => {
   const parts = name.split('|').map((s) => s.trim()).filter(Boolean);
-  const prefer = parts[1] || parts[0] || name;
-  return encodeURIComponent(prefer.toLowerCase().replace(/\s+/g, '-'));
+  const latin = parts.find((p) => /[a-zA-ZäöüÄÖÜß]/.test(p));
+  const prefer = latin || parts[0] || name;
+  if (!/[a-zA-Z]/.test(prefer) && /[\u0400-\u04FF]/.test(prefer)) return null;
+  return prefer
+    .toLowerCase()
+    .replace(/ä/g, 'ae')
+    .replace(/ö/g, 'oe')
+    .replace(/ü/g, 'ue')
+    .replace(/ß/g, 'ss')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '');
+};
+
+/**
+ * Cities to scrape = homepage catalog (real slugs), matched to DB when possible.
+ * Inventing /city/{cyrillic}/ from DB names yields 404 and zero events.
+ */
+const resolveCitiesToScrape = async (citiesAll, meta = {}) => {
+  const { cityId, cityName, maxCities } = meta;
+  const { candidates, meta: discoverMeta } = await discoverKontramarkaCities();
+
+  const bySlug = new Map();
+  for (const cand of candidates) {
+    if (!cand?.slug || bySlug.has(cand.slug)) continue;
+    const dbCity = findCityInDb(citiesAll, cand.raw_name)
+      || findCityInDb(citiesAll, cand.slug.replace(/-/g, ' '));
+    bySlug.set(cand.slug, {
+      name: dbCity?.name || cand.raw_name,
+      slug: cand.slug,
+      kmLabel: cand.raw_name,
+      _id: dbCity?._id || null,
+      country_id: dbCity?.country_id || null,
+      coordinates: dbCity?.coordinates || null,
+    });
+  }
+
+  let targets = [...bySlug.values()];
+
+  if (cityId) {
+    const id = String(cityId);
+    targets = targets.filter((t) => t._id && String(t._id) === id);
+  } else if (cityName) {
+    const normalized = cityName.toLowerCase();
+    targets = targets.filter((t) => (
+      String(t.name || '').toLowerCase().includes(normalized)
+      || String(t.kmLabel || '').toLowerCase().includes(normalized)
+      || String(t.slug || '').toLowerCase().includes(normalized)
+    ));
+  }
+
+  if (typeof maxCities === 'number' && maxCities > 0) {
+    targets = targets.slice(0, maxCities);
+  }
+
+  return { targets, discoverMeta };
 };
 
 /** Форматирует последовательность чисел дат: 3+ подряд — через тире */
@@ -155,18 +212,22 @@ async function parseKontramarka({ meta = {}, runId }) {
     const {
       adminId, countryId, cityId, specialization = 'Event', maxCities, cityName,
     } = meta || {};
-    
+
     const citiesAll = await loadCities();
-    let cities = citiesAll;
-    if (cityName) {
-      const normalized = cityName.toLowerCase();
-      cities = citiesAll.filter((c) => c.name.toLowerCase().includes(normalized));
-    } else if (typeof maxCities === 'number' && maxCities > 0) {
-      cities = citiesAll.slice(0, maxCities);
-    }
+    const { targets: cities, discoverMeta } = await resolveCitiesToScrape(citiesAll, {
+      cityId, cityName, maxCities,
+    });
 
-    await logProgress(parseRunId, `Starting Kontramarka parsing. Cities to process: ${cities.length}`);
+    await logProgress(
+      parseRunId,
+      `Starting Kontramarka parsing. Catalog cities: ${discoverMeta?.linksFound ?? '?'}, `
+      + `to process: ${cities.length}`,
+    );
 
+    if (!cities.length) {
+      infoTexts.push('No Kontramarka city pages to process (empty catalog or filters).');
+      await logProgress(parseRunId, 'INFO: No cities to process after catalog resolve');
+    } else {
     let browser;
     try {
       await logProgress(parseRunId, 'Launching browser...');
@@ -183,7 +244,13 @@ async function parseKontramarka({ meta = {}, runId }) {
     }
 
     const processCity = async (cityItem) => {
-      const slug = buildCitySlug(cityItem.name);
+      const slug = cityItem.slug || buildCitySlug(cityItem.name);
+      if (!slug) {
+        const skipMsg = `Skip city "${cityItem.name}" – no Latin Kontramarka slug`;
+        infoTexts.push(skipMsg);
+        await logProgress(parseRunId, `INFO: ${skipMsg}`);
+        return [];
+      }
       const url = `https://www.kontramarka.de/city/${slug}/`;
       const page = await browser.newPage();
       const cityEvents = [];
@@ -229,7 +296,7 @@ async function parseKontramarka({ meta = {}, runId }) {
               if (sold) return null;
               const startIso = row.querySelector('[itemprop="startDate"]')?.getAttribute('content') || '';
               const endIso = row.querySelector('[itemprop="endDate"]')?.getAttribute('content') || startIso;
-              const cityName = row.querySelector('.schedule-col-main .city')?.textContent?.trim() || '';
+              const slotCityName = row.querySelector('.schedule-col-main .city')?.textContent?.trim() || '';
               const place = row.querySelector('.schedule-col-main .place')?.textContent?.trim() || '';
               const address = row.querySelector('[itemprop="address"]')?.getAttribute('content')
                 || place
@@ -241,7 +308,7 @@ async function parseKontramarka({ meta = {}, runId }) {
               return {
                 startIso,
                 endIso,
-                cityName,
+                cityName: slotCityName,
                 place,
                 address,
                 price,
@@ -254,16 +321,17 @@ async function parseKontramarka({ meta = {}, runId }) {
             const groups = new Map();
 
             for (const slot of slots) {
-              const matchedCity = findCityInDb(cities, slot.cityName || cityItem.name);
-              const fallbackCoords = parseCoordinatesField(matchedCity?.coordinates);
-              const resolvedCityId = cityId || matchedCity?._id || null;
-              const resolvedCountryId = countryId || matchedCity?.country_id || null;
+              const matchedCity = findCityInDb(citiesAll, slot.cityName || cityItem.kmLabel || cityItem.name)
+                || (cityItem._id ? cityItem : null);
+              const fallbackCoords = parseCoordinatesField(matchedCity?.coordinates || cityItem.coordinates);
+              const resolvedCityId = cityId || matchedCity?._id || cityItem._id || null;
+              const resolvedCountryId = countryId || matchedCity?.country_id || cityItem.country_id || null;
 
               if (!resolvedCityId || !resolvedCountryId) {
                 skippedMissingIds += 1;
-                const targetCityName = slot.cityName || cityItem.name;
+                const targetCityName = slot.cityName || cityItem.kmLabel || cityItem.name;
                 citySuggestions.note(targetCityName, {
-                  slug: buildCitySlug(targetCityName),
+                  slug: slug || buildCitySlug(targetCityName),
                   source_url: tourUrl || url,
                 });
                 const skipMsg = `Skip event "${card.title}" – city/country id is missing; provide meta.cityId/meta.countryId or add IDs to DB. [DEBUG targetCity="${targetCityName}" matched="${matchedCity?.name || 'null'}" matchedCityId="${matchedCity?._id || '-'}" matchedCountryId="${matchedCity?.country_id || '-'}" providedCityId="${cityId || '-'}" providedCountryId="${countryId || '-'}"]`;
@@ -365,6 +433,7 @@ async function parseKontramarka({ meta = {}, runId }) {
     await browser.close();
     await logProgress(parseRunId, 'Browser closed');
     await logProgress(parseRunId, `Parsing completed. Total: ${(allEvents || []).length} events`);
+    }
   } catch (e) {
     if (e?.cancelled) throw e;
     const errMsg = e?.message || 'Unknown error while parsing Kontramarka';
