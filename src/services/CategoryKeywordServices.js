@@ -1,5 +1,9 @@
 import EventsCategoriesSchema from '../schemas/EventsCategoriesSchema';
 import { createLoggerWithSource } from '../helpers/logger';
+import {
+  keywordMatchesText,
+  stripHtmlForKeywords,
+} from '../helpers/keywordMatch';
 
 const logger = createLoggerWithSource('CATEGORY_KEYWORDS');
 
@@ -14,6 +18,7 @@ const THRESHOLD = 5;
 
 /**
  * Detect category from EventsCategories.keywords in DB only (synced from main).
+ * Matching is whole-word/phrase (Unicode); short/trap tokens are ignored.
  * @param {object} event
  * @param {string} [_source] unused — kept for call-site compat
  */
@@ -26,7 +31,9 @@ export async function detectCategoryByKeywords(event, _source) {
 
   const nameText = event.name ? String(event.name).toLowerCase() : '';
   const specText = event.specialization ? String(event.specialization).toLowerCase() : '';
-  const descText = event.description ? String(event.description).toLowerCase() : '';
+  const descText = event.description
+    ? stripHtmlForKeywords(event.description).toLowerCase()
+    : '';
 
   let bestCategory = null;
   let bestScore = -Infinity;
@@ -50,13 +57,13 @@ export async function detectCategoryByKeywords(event, _source) {
         }
       };
 
-      if (nameText && nameText.includes(keywordWord)) {
+      if (nameText && keywordMatchesText(nameText, keywordWord)) {
         applyWeight(keywordValue * WEIGHTS.name);
       }
-      if (specText && specText.includes(keywordWord)) {
+      if (specText && keywordMatchesText(specText, keywordWord)) {
         applyWeight(keywordValue * WEIGHTS.specialization);
       }
-      if (descText && descText.includes(keywordWord)) {
+      if (descText && keywordMatchesText(descText, keywordWord)) {
         applyWeight(keywordValue * WEIGHTS.description);
       }
 

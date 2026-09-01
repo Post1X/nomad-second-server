@@ -4,6 +4,8 @@
  * Does NOT pull tokens from event titles (cities/artists noise).
  */
 
+import { isUnsafeKeyword } from './keywordMatch';
+
 const STOP = new Set([
   'и', 'в', 'на', 'для', 'с', 'по', 'the', 'and', 'of', 'a', 'an',
   'event', 'events', 'мероприятия', 'мероприятие', 'шоу', ' fest',
@@ -58,6 +60,8 @@ export const buildCategoryKeywords = (categoryName, _exampleEvents = [], extraKe
   const add = (word, value, { allowLatin = false } = {}) => {
     const w = String(word || '').trim().toLowerCase().replace(/ё/g, 'е');
     if (!w || w.length < 3 || STOP.has(w)) return;
+    // Drop substring traps / too-short tokens (AI extras often add "lan", "art", "it")
+    if (isUnsafeKeyword(w)) return;
     const hasCyr = /\p{Script=Cyrillic}/u.test(w);
     const hasLat = /[a-z]/i.test(w);
     if (!hasCyr && hasLat && !allowLatin) return;
