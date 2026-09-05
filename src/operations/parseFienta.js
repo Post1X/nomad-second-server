@@ -1,12 +1,15 @@
 import moment from 'moment';
 import puppeteer from 'puppeteer-extra';
 import StealthPlugin from 'puppeteer-extra-plugin-stealth';
-import OperationsSchema from '../schemas/OperationsSchema';
+import ParseRunsSchema from '../schemas/ParseRunsSchema';
 import CitiesSchema from '../schemas/CitiesSchema';
 import FientaPagesSchema from '../schemas/FientaPagesSchema';
-import ParsedEventsSchema from '../schemas/ParsedEventsSchema';
 import { EVENT_SOURCE } from '../helpers/constants';
 import { createLoggerWithSource } from '../helpers/logger';
+import saveProcessedEvents from '../helpers/saveProcessedEvents';
+import logParseRun from '../helpers/logParseRun';
+import createCitySuggestionCollector from '../helpers/createCitySuggestionCollector';
+import findCityInDb from '../helpers/cityMatching';
 
 const logger = createLoggerWithSource('PARSE_FIENTA');
 
@@ -20,20 +23,8 @@ const loadCities = async () => {
   return citiesCache.list;
 };
 
-const logProgress = async (operationId, message) => {
-  if (operationId) {
-    try {
-      const operation = await OperationsSchema.findById(operationId);
-      if (operation) {
-        const timestamp = new Date().toISOString();
-        const newLog = `[${timestamp}] ${message}`;
-        operation.infoText = operation.infoText ? `${operation.infoText}\n${newLog}` : newLog;
-        await operation.save();
-      }
-    } catch (e) {
-      logger.error(`Error logging progress: ${e.message || e}`);
-    }
-  }
+const logProgress = async (runId, message) => {
+  await logParseRun(runId, `[${new Date().toISOString()}] ${message}`);
 };
 
 moment.locale('ru');
@@ -133,23 +124,6 @@ const formatHoldingDate = (dateArray) => {
   return result;
 };
 
-const normalize = (str = '') => str
-  .toString()
-  .toLowerCase()
-  .normalize('NFD')
-  .replace(/[\u0300-\u036f]/g, '')
-  .replace(/\s+/g, ' ')
-  .trim();
-
-const cityTokens = (name = '') => name.split('|').map((s) => normalize(s)).filter(Boolean);
-
-/** Проверяет, что token встречается в text целиком (token может быть из нескольких слов, напр. "new york"). Границы — явные разделители, не \\b, чтобы кириллица не матчилась по подстроке (Бар в Барселона). */
-const containsWholeWord = (text, token) => {
-  if (!text || !token) return false;
-  const escaped = token.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  return new RegExp(`(^|[\\s,.\\-•;])${escaped}([\\s,.\\-•;]|$)`, 'i').test(text);
-};
-
 /** Очищает адрес от переносов строк и множественных пробелов */
 const cleanAddress = (address) => {
   if (!address || typeof address !== 'string') return '';
@@ -159,71 +133,24 @@ const cleanAddress = (address) => {
     .trim();
 };
 
+/**
+ * Resolve city from Fienta location string (often full address).
+ * Prefer last address parts so venue names like "Tokyo Comedy Bar" don't steal the match;
+ * matching itself goes through findCityInDb (aliases + pipe names).
+ */
 const findCity = (cities, targetName = '') => {
-  const target = normalize(targetName);
-  if (!target) return null;
+  const raw = String(targetName || '').trim();
+  if (!raw) return null;
 
-  // Разбиваем адрес по запятым и точкам (город обычно в последних частях)
-  const parts = target.split(/[,•]/).map(p => p.trim()).filter(p => p.length > 0);
+  const direct = findCityInDb(cities, raw);
+  if (direct) return direct;
 
-  // Проверяем только последние 3 части адреса (город обычно там)
-  // Это предотвращает случайное определение города из названия заведения (например, "Bar" из "Tokyo Comedy Bar")
+  const parts = raw.split(/[,•|]/).map((p) => p.trim()).filter(Boolean);
   const partsToCheck = parts.slice(-3);
-
-  for (let partIdx = partsToCheck.length - 1; partIdx >= 0; partIdx--) {
-    const part = partsToCheck[partIdx];
-    const words = part.split(/\s+/).filter(w => w.length > 2);
-
-    // Проверяем слова справа налево в этой части
-    for (let wordIdx = words.length - 1; wordIdx >= 0; wordIdx--) {
-      const word = words[wordIdx];
-
-      // Пробуем найти совпадение только по целым словам (чтобы "Бар" не матчился с "Барселона")
-      for (let i = 0; i < cities.length; i++) {
-        const c = cities[i];
-        const tokens = cityTokens(c.name);
-        for (let j = 0; j < tokens.length; j++) {
-          const tok = tokens[j];
-          // Точное совпадение слова
-          if (word === tok) {
-            return c;
-          }
-          // Токен города должен встречаться в части адреса как отдельное слово целиком
-          if (containsWholeWord(part, tok)) {
-            return c;
-          }
-        }
-      }
-
-      // Пробуем совпадение с несколькими словами подряд (для составных названий типа "Old Tbilisi", "Shibuya City")
-      if (wordIdx > 0) {
-        const twoWords = `${words[wordIdx - 1]} ${words[wordIdx]}`;
-        for (let i = 0; i < cities.length; i++) {
-          const c = cities[i];
-          const tokens = cityTokens(c.name);
-          for (let j = 0; j < tokens.length; j++) {
-            const tok = tokens[j];
-            if (containsWholeWord(part, tok) || (tok === twoWords) || containsWholeWord(tok, twoWords)) {
-              return c;
-            }
-          }
-        }
-      }
-    }
-
-    // Проверяем всю часть: название города должно встречаться целиком как слово
-    for (let i = 0; i < cities.length; i++) {
-      const c = cities[i];
-      const tokens = cityTokens(c.name);
-      for (let j = 0; j < tokens.length; j++) {
-        const tok = tokens[j];
-        if (containsWholeWord(part, tok)) {
-          return c;
-        }
-      }
-    }
+  for (let i = partsToCheck.length - 1; i >= 0; i -= 1) {
+    const match = findCityInDb(cities, partsToCheck[i]);
+    if (match) return match;
   }
-
   return null;
 };
 
@@ -466,16 +393,18 @@ const parseEventPage = async (page, url) => {
   }
 };
 
-async function parseFienta({ meta, operationId }) {
+async function parseFienta({ meta = {}, runId }) {
+  const parseRunId = runId;
   logger.info('\n========================================');
   logger.info('🚀 НАЧАЛО ПАРСИНГА FIENTA');
   logger.info('========================================');
-  logger.info(`Operation ID: ${operationId}`);
+  logger.info(`Parse run ID: ${parseRunId}`);
   logger.info(`Meta: ${JSON.stringify(meta, null, 2)}`);
   logger.info('========================================\n');
 
   const errorTexts = [];
   const infoLines = [];
+  const citySuggestions = createCitySuggestionCollector(EVENT_SOURCE.fienta);
 
   const {
     adminId,
@@ -500,7 +429,7 @@ async function parseFienta({ meta, operationId }) {
   infoLines.push(
     `Города: всего ${citiesAll.length}, исключено "удаленно/все города": ${excludedRemote}, без ориг. названия: ${excludedNoOriginal}, к обработке: ${afterOriginal.length}`
   );
-  await logProgress(operationId, infoLines[infoLines.length - 1]);
+  await logProgress(parseRunId, infoLines[infoLines.length - 1]);
 
   let cities = afterOriginal;
   if (cityName || cityId) {
@@ -522,16 +451,16 @@ async function parseFienta({ meta, operationId }) {
 
   if (!page) {
     errorTexts.push('Нет необработанных страниц в базе данных');
-    await OperationsSchema.findByIdAndUpdate(operationId, {
+    await ParseRunsSchema.findByIdAndUpdate(parseRunId, {
       status: 'error',
-      finish_time: new Date(),
+      finishedAt: new Date(),
       errorText: errorTexts.join('\n') || '',
       infoText: infoLines.join('\n'),
     });
     return;
   }
 
-  await logProgress(operationId, `Processing page ${page._id}...`);
+  await logProgress(parseRunId, `Processing page ${page._id}...`);
 
   let totalCards = 0;
   let browser;
@@ -574,7 +503,7 @@ async function parseFienta({ meta, operationId }) {
     const CLASSIFICATION_BATCH_SIZE = 100;
 
     logger.info(`\n=== КЛАССИФИКАЦИЯ ВСЕХ СОБЫТИЙ (${totalCards} карточек) ===`);
-    await logProgress(operationId, `Starting classification of ${totalCards} cards...`);
+    await logProgress(parseRunId, `Starting classification of ${totalCards} cards...`);
 
     // Классифицируем все карточки батчами
     for (let batchStart = 0; batchStart < totalCards; batchStart += CLASSIFICATION_BATCH_SIZE) {
@@ -582,7 +511,7 @@ async function parseFienta({ meta, operationId }) {
       const batch = validCards.slice(batchStart, batchEnd);
 
       logger.info(`Классификация батча ${Math.floor(batchStart / CLASSIFICATION_BATCH_SIZE) + 1}/${Math.ceil(totalCards / CLASSIFICATION_BATCH_SIZE)} (${batchStart + 1}-${batchEnd} из ${totalCards})`);
-      await logProgress(operationId, `Classifying batch ${Math.floor(batchStart / CLASSIFICATION_BATCH_SIZE) + 1}/${Math.ceil(totalCards / CLASSIFICATION_BATCH_SIZE)}: ${batchStart + 1}-${batchEnd} of ${totalCards}`);
+      await logProgress(parseRunId, `Classifying batch ${Math.floor(batchStart / CLASSIFICATION_BATCH_SIZE) + 1}/${Math.ceil(totalCards / CLASSIFICATION_BATCH_SIZE)}: ${batchStart + 1}-${batchEnd} of ${totalCards}`);
 
       for (let i = 0; i < batch.length; i += 1) {
         const card = batch[i];
@@ -626,7 +555,7 @@ async function parseFienta({ meta, operationId }) {
     infoLines.push(`Классификация всех ${totalCards} карточек: тип 1 = ${type1Cards.length}, тип 2 = ${type2Cards.length}, тип 3 = ${type3Cards.length}, пропущено = ${skippedCards.length}`);
 
     // Запускаем браузер для парсинга детальных страниц
-    await logProgress(operationId, 'Launching browser for detail pages parsing...');
+    await logProgress(parseRunId, 'Launching browser for detail pages parsing...');
     browser = await puppeteer.launch({
       headless: 'new',
       args: [
@@ -636,14 +565,14 @@ async function parseFienta({ meta, operationId }) {
         '--disable-features=IsolateOrigins,site-per-process',
       ],
     });
-    await logProgress(operationId, 'Browser launched.');
+    await logProgress(parseRunId, 'Browser launched.');
 
     // ЛОГИКА ОБРАБОТКИ ТИПОВ 2 И 3:
     // Для типов 2 и 3 нужно открыть страницу события и собрать ссылки на все серии
 
     const allCardsToProcess = [...type2Cards, ...type3Cards];
     logger.info(`\n=== ОБРАБОТКА ТИПОВ 2 И 3 (${allCardsToProcess.length} событий) ===`);
-    await logProgress(operationId, `Processing types 2 and 3: ${allCardsToProcess.length} events...`);
+    await logProgress(parseRunId, `Processing types 2 and 3: ${allCardsToProcess.length} events...`);
 
     // Структура результатов
     const result = {
@@ -670,7 +599,7 @@ async function parseFienta({ meta, operationId }) {
       const batch = allCardsToProcess.slice(batchStart, batchEnd);
 
       logger.info(`\nОбработка батча ${Math.floor(batchStart / PROCESSING_BATCH_SIZE) + 1}/${Math.ceil(allCardsToProcess.length / PROCESSING_BATCH_SIZE)} (${batchStart + 1}-${batchEnd} из ${allCardsToProcess.length})`);
-      await logProgress(operationId, `Processing batch ${Math.floor(batchStart / PROCESSING_BATCH_SIZE) + 1}/${Math.ceil(allCardsToProcess.length / PROCESSING_BATCH_SIZE)}: ${batchStart + 1}-${batchEnd} of ${allCardsToProcess.length}`);
+      await logProgress(parseRunId, `Processing batch ${Math.floor(batchStart / PROCESSING_BATCH_SIZE) + 1}/${Math.ceil(allCardsToProcess.length / PROCESSING_BATCH_SIZE)}: ${batchStart + 1}-${batchEnd} of ${allCardsToProcess.length}`);
 
       for (let i = 0; i < batch.length; i += 1) {
         const card = batch[i];
@@ -785,6 +714,7 @@ async function parseFienta({ meta, operationId }) {
           }
 
         } catch (error) {
+          if (error?.cancelled) throw error;
           logger.error(`  ✗ Ошибка при обработке события ${card.href}: ${error.message}`);
           errorTexts.push(`Ошибка обработки ${card.href}: ${error.message}`);
         }
@@ -795,7 +725,7 @@ async function parseFienta({ meta, operationId }) {
     // СОЗДАНИЕ МЕРОПРИЯТИЙ
     // ============================================
     logger.info(`\n=== СОЗДАНИЕ МЕРОПРИЯТИЙ ===`);
-    await logProgress(operationId, 'Starting event creation...');
+    await logProgress(parseRunId, 'Starting event creation...');
 
     allEvents = [];
     const citiesList = await loadCities();
@@ -808,7 +738,7 @@ async function parseFienta({ meta, operationId }) {
       const batch = result.links.slice(batchStart, batchEnd);
 
       logger.info(`Обработка типа 1, батч ${Math.floor(batchStart / TYPE1_BATCH_SIZE) + 1}/${Math.ceil(result.links.length / TYPE1_BATCH_SIZE)} (${batchStart + 1}-${batchEnd} из ${result.links.length})`);
-      await logProgress(operationId, `Processing type 1 batch ${Math.floor(batchStart / TYPE1_BATCH_SIZE) + 1}/${Math.ceil(result.links.length / TYPE1_BATCH_SIZE)}: ${batchStart + 1}-${batchEnd} of ${result.links.length}`);
+      await logProgress(parseRunId, `Processing type 1 batch ${Math.floor(batchStart / TYPE1_BATCH_SIZE) + 1}/${Math.ceil(result.links.length / TYPE1_BATCH_SIZE)}: ${batchStart + 1}-${batchEnd} of ${result.links.length}`);
 
       for (let i = 0; i < batch.length; i += 1) {
         const link = batch[i];
@@ -838,6 +768,7 @@ async function parseFienta({ meta, operationId }) {
         // Находим город - функция findCity уже проверяет только последние части адреса
         const city = findCity(citiesList, cleanedLocation);
         if (!city) {
+          citySuggestions.noteFromLocation(cleanedLocation, { source_url: link });
           logger.warn(`  → Пропущено: город не найден для "${cleanedLocation}"`);
           continue;
         }
@@ -849,7 +780,6 @@ async function parseFienta({ meta, operationId }) {
           admin_id: adminId,
           country_id: city.country_id || countryId,
           city_id: city._id.toString(),
-          operationId: operationId,
           contacts: { website: link },
           photos: pageData.imageUrl ? [{ full_url: pageData.imageUrl }] : [],
           holding_date: formatHoldingDate([eventDate]),
@@ -867,6 +797,7 @@ async function parseFienta({ meta, operationId }) {
         allEvents.push(newEvent);
         logger.info(`  → Создано мероприятие: "${pageData.name}"`);
       } catch (error) {
+        if (error?.cancelled) throw error;
         logger.error(`  ✗ Ошибка при обработке ссылки ${link}: ${error.message}`);
         errorTexts.push(`Ошибка обработки типа 1 ${link}: ${error.message}`);
       }
@@ -882,7 +813,7 @@ async function parseFienta({ meta, operationId }) {
       const batch = type2Groups.slice(batchStart, batchEnd);
 
       logger.info(`Обработка типа 2, батч ${Math.floor(batchStart / TYPE2_BATCH_SIZE) + 1}/${Math.ceil(type2Groups.length / TYPE2_BATCH_SIZE)} (${batchStart + 1}-${batchEnd} из ${type2Groups.length})`);
-      await logProgress(operationId, `Processing type 2 batch ${Math.floor(batchStart / TYPE2_BATCH_SIZE) + 1}/${Math.ceil(type2Groups.length / TYPE2_BATCH_SIZE)}: ${batchStart + 1}-${batchEnd} of ${type2Groups.length}`);
+      await logProgress(parseRunId, `Processing type 2 batch ${Math.floor(batchStart / TYPE2_BATCH_SIZE) + 1}/${Math.ceil(type2Groups.length / TYPE2_BATCH_SIZE)}: ${batchStart + 1}-${batchEnd} of ${type2Groups.length}`);
 
       for (let i = 0; i < batch.length; i += 1) {
         const group = batch[i];
@@ -927,6 +858,7 @@ async function parseFienta({ meta, operationId }) {
         // Находим город - функция findCity уже проверяет только последние части адреса
         const city = findCity(citiesList, cleanedLocation);
         if (!city) {
+          citySuggestions.noteFromLocation(cleanedLocation, { source_url: firstLink });
           logger.warn(`  → Пропущено: город не найден для "${cleanedLocation}"`);
           continue;
         }
@@ -941,7 +873,6 @@ async function parseFienta({ meta, operationId }) {
           admin_id: adminId,
           country_id: city.country_id || countryId,
           city_id: city._id.toString(),
-          operationId: operationId,
           contacts: { website: firstLink },
           photos: pageData.imageUrl ? [{ full_url: pageData.imageUrl }] : [],
           holding_date: formatHoldingDate(dates),
@@ -959,6 +890,7 @@ async function parseFienta({ meta, operationId }) {
         allEvents.push(newEvent);
         logger.info(`  → Создано мероприятие с ${dates.length} датами: "${pageData.name || group.original_title}"`);
       } catch (error) {
+        if (error?.cancelled) throw error;
         logger.error(`  ✗ Ошибка при обработке типа 2 ${group.original_url}: ${error.message}`);
         errorTexts.push(`Ошибка обработки типа 2 ${group.original_url}: ${error.message}`);
       }
@@ -974,7 +906,7 @@ async function parseFienta({ meta, operationId }) {
       const batch = type3Groups.slice(batchStart, batchEnd);
 
       logger.info(`Обработка типа 3, батч ${Math.floor(batchStart / TYPE3_BATCH_SIZE) + 1}/${Math.ceil(type3Groups.length / TYPE3_BATCH_SIZE)} (${batchStart + 1}-${batchEnd} из ${type3Groups.length})`);
-      await logProgress(operationId, `Processing type 3 batch ${Math.floor(batchStart / TYPE3_BATCH_SIZE) + 1}/${Math.ceil(type3Groups.length / TYPE3_BATCH_SIZE)}: ${batchStart + 1}-${batchEnd} of ${type3Groups.length}`);
+      await logProgress(parseRunId, `Processing type 3 batch ${Math.floor(batchStart / TYPE3_BATCH_SIZE) + 1}/${Math.ceil(type3Groups.length / TYPE3_BATCH_SIZE)}: ${batchStart + 1}-${batchEnd} of ${type3Groups.length}`);
 
       for (let i = 0; i < batch.length; i += 1) {
         const group = batch[i];
@@ -1013,6 +945,7 @@ async function parseFienta({ meta, operationId }) {
           // Находим город - функция findCity уже проверяет только последние части адреса
           const city = findCity(citiesList, cleanedLocation);
           if (!city) {
+            citySuggestions.noteFromLocation(cleanedLocation, { source_url: link });
             logger.warn(`    → Пропущено: город не найден для "${cleanedLocation}"`);
             continue;
           }
@@ -1024,7 +957,6 @@ async function parseFienta({ meta, operationId }) {
             admin_id: adminId,
             country_id: city.country_id || countryId,
             city_id: city._id.toString(),
-            operationId: operationId,
             contacts: { website: link },
             photos: pageData.imageUrl ? [{ full_url: pageData.imageUrl }] : [],
             holding_date: formatHoldingDate([eventDate]),
@@ -1042,6 +974,7 @@ async function parseFienta({ meta, operationId }) {
           allEvents.push(newEvent);
           logger.info(`    → Создано мероприятие: "${pageData.name}"`);
         } catch (error) {
+          if (error?.cancelled) throw error;
           logger.error(`    ✗ Ошибка при обработке ссылки ${link}: ${error.message}`);
           errorTexts.push(`Ошибка обработки типа 3 ${link}: ${error.message}`);
         }
@@ -1058,44 +991,58 @@ async function parseFienta({ meta, operationId }) {
     logger.info(`Тип 3: ${type3Groups.length} групп`);
     logger.info(`=== КОНЕЦ СОЗДАНИЯ МЕРОПРИЯТИЙ ===\n`);
 
-    // Сохранение мероприятий в базу данных
+    let citySuggestionStats = null;
+    try {
+      citySuggestionStats = await citySuggestions.flush();
+      if (citySuggestionStats.candidatesSeen > 0) {
+        infoLines.push(
+          `CitySuggestions: +${citySuggestionStats.created} new, ${citySuggestionStats.updated} updated, `
+          + `${citySuggestionStats.alreadyInDb} already in DB`,
+        );
+      }
+    } catch (e) {
+      errorTexts.push(`CitySuggestions flush failed: ${e?.message || e}`);
+    }
+
     if (allEvents.length > 0) {
-      await logProgress(operationId, `Saving ${allEvents.length} events to database...`);
-      const BATCH_SIZE = 10;
-
+      await logProgress(parseRunId, `Saving ${allEvents.length} events to database...`);
       try {
-        for (let i = 0; i < allEvents.length; i += BATCH_SIZE) {
-          const batch = allEvents.slice(i, i + BATCH_SIZE);
-          const batchNumber = Math.floor(i / BATCH_SIZE) + 1;
-
-          await ParsedEventsSchema.insertMany(
-            batch.map(event => ({
-              operation: operationId,
-              event_data: event,
-              batch_number: batchNumber,
-            }))
-          );
-
-          const operation = await OperationsSchema.findById(operationId);
-          await OperationsSchema.findByIdAndUpdate(operationId, {
-            infoText: `${operation?.infoText || ''}\nОбработано ${i + batch.length} из ${allEvents.length} событий. Батч ${batchNumber} из ${Math.ceil(allEvents.length / BATCH_SIZE)}`,
-          });
-        }
-
-        infoLines.push(`Создано и сохранено мероприятий: ${allEvents.length}`);
-        await logProgress(operationId, `Successfully saved ${allEvents.length} events`);
+        const { processed } = await saveProcessedEvents({
+          runId: parseRunId,
+          events: allEvents,
+          source: EVENT_SOURCE.fienta,
+          infoTexts: infoLines,
+          errorTexts,
+          extraStatistics: {
+            page_id: page?._id?.toString() || null,
+            total_cards: totalCards || 0,
+            citySuggestions: citySuggestionStats,
+          },
+        });
+        infoLines.push(`Создано и сохранено мероприятий: ${processed.length} (raw ${allEvents.length})`);
+        await logProgress(parseRunId, `Successfully saved ${processed.length} events`);
       } catch (saveError) {
+        if (saveError?.cancelled) throw saveError;
         const saveErrMsg = `Error saving events: ${saveError.message}`;
         errorTexts.push(saveErrMsg);
         logger.error(saveErrMsg);
-        await logProgress(operationId, `ERROR: ${saveErrMsg}`);
+        await logProgress(parseRunId, `ERROR: ${saveErrMsg}`);
       }
     } else {
       infoLines.push('Мероприятия не созданы');
-      await logProgress(operationId, 'No events created');
+      await logProgress(parseRunId, 'No events created');
+      await ParseRunsSchema.findByIdAndUpdate(parseRunId, {
+        status: 'success',
+        finishedAt: new Date(),
+        infoText: infoLines.join('\n'),
+        statistics: JSON.stringify({
+          page_id: page?._id?.toString() || null,
+          total_events: 0,
+          citySuggestions: citySuggestionStats,
+        }),
+      });
     }
 
-    // Помечаем страницу как обработанную
     await FientaPagesSchema.findByIdAndUpdate(page._id, {
       is_processed: true,
       processed_at: new Date(),
@@ -1103,13 +1050,14 @@ async function parseFienta({ meta, operationId }) {
 
     if (browser) {
       await browser.close();
-      await logProgress(operationId, 'Browser closed.');
+      await logProgress(parseRunId, 'Browser closed.');
     }
 
     infoLines.push(`Страница ${page._id} успешно обработана`);
-    await logProgress(operationId, `Page ${page._id} processed successfully`);
+    await logProgress(parseRunId, `Page ${page._id} processed successfully`);
 
   } catch (e) {
+    if (e?.cancelled) throw e;
     const errorMsg = e?.message || String(e);
     errorTexts.push(errorMsg);
     logger.error(`Error processing page ${page._id}: ${errorMsg}`);
@@ -1121,26 +1069,25 @@ async function parseFienta({ meta, operationId }) {
     }
 
     await FientaPagesSchema.findByIdAndUpdate(page._id, {
-      is_processed: true,
-      processed_at: new Date(),
       error_message: errorMsg,
     });
 
-    await logProgress(operationId, `ERROR processing page ${page._id}: ${errorMsg}`);
+    await logProgress(parseRunId, `ERROR processing page ${page._id}: ${errorMsg}`);
   }
 
-  const finalInfoText = infoLines.join('\n');
-  await OperationsSchema.findByIdAndUpdate(operationId, {
-    status: errorTexts.length > 0 ? 'error' : 'success',
-    finish_time: new Date(),
-    errorText: errorTexts.join('\n') || '',
-    infoText: finalInfoText,
-    statistics: JSON.stringify({
-      page_id: page?._id?.toString() || null,
-      total_cards: totalCards || 0,
-      total_events: allEvents?.length || 0,
-    }),
-  });
+  if (errorTexts.length > 0) {
+    await ParseRunsSchema.findByIdAndUpdate(parseRunId, {
+      status: 'error',
+      finishedAt: new Date(),
+      errorText: errorTexts.join('\n') || '',
+      infoText: infoLines.join('\n'),
+      statistics: JSON.stringify({
+        page_id: page?._id?.toString() || null,
+        total_cards: totalCards || 0,
+        total_events: allEvents?.length || 0,
+      }),
+    });
+  }
 }
 
 export default parseFienta;

@@ -8,13 +8,12 @@
     "clean": "rm -rf dist",
     "build": "yarn clean && babel ./src --out-dir dist --copy-files",
     "prod": "yarn build && node -r dotenv/config ./dist/bin/www",
-    "parse:ticketmaster": "babel-node -r dotenv/config scripts/runTicketmasterParsing.js"
+    "parse:ticketmaster": "babel-node -r dotenv/config scripts/runTicketmasterParsing.js",
+    "test:merge": "babel-node -r dotenv/config scripts/testMergeLogic.js",
+    "backfill:category-suggestions": "babel-node -r dotenv/config scripts/backfillCategorySuggestions.js"
   },
   "dependencies": {
     "cheerio": "^1.0.0",
-    "puppeteer": "^23.7.0",
-    "puppeteer-extra": "^3.3.6",
-    "puppeteer-extra-plugin-stealth": "^2.11.2",
     "cookie-parser": "~1.4.4",
     "core-js": "^3.35.1",
     "cors": "^2.8.5",
@@ -27,6 +26,10 @@
     "moment": "^2.30.1",
     "mongoose": "^8.1.1",
     "node-cron": "^3.0.3",
+    "openai": "^6.48.0",
+    "puppeteer": "^23.7.0",
+    "puppeteer-extra": "^3.3.6",
+    "puppeteer-extra-plugin-stealth": "^2.11.2",
     "regenerator-runtime": "^0.14.1",
     "winston": "^3.11.0"
   },
@@ -39,4 +42,3 @@
     "nodemon": "^2.0.15"
   }
 }
-

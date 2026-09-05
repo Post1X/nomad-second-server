@@ -59,7 +59,7 @@ yarn prod
 Все эндпоинты требуют заголовок `X-API-Key` с правильным API ключом.
 
 ### POST /parsing/create
-Создает операцию парсинга и запускает скрипт парсинга (ручной запуск).
+Создаёт ParseRun и запускает парсер (ручной запуск).
 
 **Тело запроса:**
 ```json
@@ -72,77 +72,34 @@ yarn prod
 }
 ```
 
-Типы: `parsingEventsFromFienta`, `parsingEventsFromEventim`, `parsingEventsFromKontramarka`, `parsingEventsFromTicketmaster`.
+Типы: `parsingEventsFromFienta`, `parsingEventsFromEventim`, `parsingEventsFromKontramarka`, `parsingEventsFromTicketmaster`, `parsingEventsFromIsraelinfo` (или `source`: `fienta` / `eventim` / …).
 
 **Ответ:**
 ```json
 {
   "status": "ok",
-  "operationId": "...",
-  "message": "Operation created and started"
+  "runId": "...",
+  "message": "Parse run created and started"
 }
 ```
 
-### GET /parsing/results/:operationId
-Возвращает операцию и все спарсенные события.
+### GET /parsing/results/:runId
+Возвращает ParseRun и связанные ParsedEvents.
 
-**Ответ:**
-```json
-{
-  "status": "ok",
-  "operation": { ... },
-  "events": [ ... ],
-  "totalEvents": 150
-}
-```
+### GET /parsing/events
+Выдаёт ParsedEvents по `source`/`type` с пагинацией (`onlyPending` по умолчанию).
 
-### GET /parsing/operations
-Возвращает **последнюю** операцию указанного типа, ещё не взятую (is_taken: false), и её мероприятия с пагинацией. После запроса эта операция помечается как is_taken: true.
+### GET /parsing/cron
+Список jobs + enabled-флаги.
 
-**Query параметры:**
-- `type` (обязательно) — тип операции (`parsingEventsFromFienta`, `parsingEventsFromEventim`, `parsingEventsFromKontramarka`, `parsingEventsFromTicketmaster`)
-- `page` (опционально, по умолчанию 1) — номер страницы по **событиям**
-- `per_page` (опционально, по умолчанию 20, макс. 100) — количество **событий** на странице
+### POST /parsing/cron/:jobId/run · /enable · /disable
+Ручной запуск / вкл / выкл одного cron (kontramarka, eventim, fienta, ticketmaster, israelinfo, dictSync, cleanup).
 
-**Важно:**
-- Берётся только одна операция — последняя подходящая по дате
-- `page` и `per_page` задают пагинацию по событиям этой операции
+### POST /parsing/cron/stop · /start
+Выкл/вкл все parser+dict jobs разом.
 
-**Пример запроса:**
-```
-GET /parsing/operations?type=parsingEventsFromFienta&page=1&per_page=20
-```
-
-**Ответ:**
-```json
-{
-  "status": "ok",
-  "operations": [
-    {
-      "_id": "...",
-      "type": "parsingEventsFromFienta",
-      "status": "success",
-      "statistics": "...",
-      "errorText": "",
-      "infoText": "...",
-      "createdAt": "2026-01-09T11:00:00.000Z",
-      "updatedAt": "2026-01-09T11:05:00.000Z",
-      "finish_time": "2026-01-09T11:05:00.000Z",
-      "is_processed": false,
-      "is_taken": true
-    }
-  ],
-  "events": [...],
-  "totalEvents": 150,
-  "totalPages": 8,
-  "page": 1,
-  "per_page": 20
-}
-```
-- `events` — мероприятия последней операции на текущей странице (пагинация по событиям)
-- `totalEvents` — всего событий у этой операции
-- `totalPages` — число страниц по событиям при заданных `per_page`
-- Если подходящих операций нет: `operations: []`, `events: []`, `totalEvents: 0`, `totalPages: 0`
+### POST /parsing/runs/:runId/stop
+Запрос остановки активного ParseRun.
 
 ### POST /parsing/cleanup
 Очищает старые данные (ParsedEventsSchema).
@@ -236,7 +193,7 @@ GET /parsing/operations?type=parsingEventsFromFienta&page=1&per_page=20
 - **Пятница 02:00** — Fienta
 - **Воскресенье 02:00** — Ticketmaster (PL)
 
-Основной сервер **забирает результаты** через `GET /parsing/operations`.
+Основной сервер **забирает результаты** через `GET /parsing/events`.
 
 Документация по Ticketmaster: [docs/ticketmaster.md](./docs/ticketmaster.md)
 

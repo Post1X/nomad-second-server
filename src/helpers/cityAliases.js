@@ -25,6 +25,8 @@ export const CITY_ALIASES = {
   'Люблин': ['Lublin'],
   'Белосток': ['Bialystok', 'Białystok'],
   'Гдиня': ['Gdynia'],
+  // DB typo variant (legacy row name)
+  'Гдиниа': ['Gdynia', 'Гдиня'],
   'Сопот': ['Sopot'],
   'Гливице': ['Gliwice'],
   'Плоцк': ['Plock', 'Płock'],

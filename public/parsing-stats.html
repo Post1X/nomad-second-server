@@ -1,0 +1,2117 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Nomad — статистика парсинга</title>
+  <style>
+    :root {
+      --bg: #0f1419;
+      --panel: #1a222d;
+      --panel2: #232d3b;
+      --border: #2e3a4a;
+      --text: #e8eef5;
+      --muted: #8b9bb0;
+      --accent: #3d9cf0;
+      --accent2: #2bb673;
+      --warn: #e6a23c;
+      --danger: #e25c5c;
+      --chip: #2a3648;
+      --radius: 10px;
+      --font: "IBM Plex Sans", "Segoe UI", system-ui, sans-serif;
+      --mono: "IBM Plex Mono", ui-monospace, monospace;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: var(--font);
+      background:
+        radial-gradient(1200px 500px at 10% -10%, #1a3a55 0%, transparent 55%),
+        radial-gradient(900px 400px at 90% 0%, #163528 0%, transparent 50%),
+        var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+    }
+    header {
+      padding: 28px 28px 12px;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 12px 24px;
+      align-items: end;
+      justify-content: space-between;
+    }
+    h1 {
+      margin: 0;
+      font-size: 1.55rem;
+      letter-spacing: -0.02em;
+      font-weight: 650;
+    }
+    .sub { color: var(--muted); font-size: 0.92rem; margin-top: 4px; }
+    main { padding: 0 28px 40px; }
+    .panel {
+      background: color-mix(in srgb, var(--panel) 92%, transparent);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 16px;
+      margin-bottom: 16px;
+      backdrop-filter: blur(6px);
+    }
+    .filters {
+      display: grid;
+      grid-template-columns: repeat(12, 1fr);
+      gap: 12px;
+      align-items: end;
+    }
+    .field { grid-column: span 3; display: flex; flex-direction: column; gap: 6px; }
+    .field.wide { grid-column: span 6; }
+    .field.full { grid-column: span 12; }
+    label { font-size: 0.78rem; color: var(--muted); text-transform: uppercase; letter-spacing: 0.04em; }
+    input, select, button {
+      font: inherit;
+      border-radius: 8px;
+      border: 1px solid var(--border);
+      background: var(--panel2);
+      color: var(--text);
+      padding: 9px 11px;
+    }
+    input:focus, select:focus { outline: 1px solid var(--accent); }
+    .sources {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+    }
+    .sources label.chip {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 7px 10px;
+      background: var(--chip);
+      border: 1px solid var(--border);
+      border-radius: 999px;
+      cursor: pointer;
+      text-transform: none;
+      letter-spacing: 0;
+      font-size: 0.9rem;
+      color: var(--text);
+      user-select: none;
+    }
+    .sources input { accent-color: var(--accent); }
+    .actions { display: flex; gap: 8px; flex-wrap: wrap; }
+    button {
+      cursor: pointer;
+      background: var(--accent);
+      border-color: transparent;
+      color: #041018;
+      font-weight: 650;
+    }
+    button.secondary { background: var(--panel2); color: var(--text); border-color: var(--border); font-weight: 500; }
+    button:disabled { opacity: 0.55; cursor: wait; }
+    .presets { display: flex; flex-wrap: wrap; gap: 6px; }
+    .presets button { padding: 6px 10px; font-size: 0.85rem; font-weight: 500; background: var(--chip); color: var(--text); border-color: var(--border); }
+    .cards {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+      gap: 12px;
+      margin-bottom: 16px;
+    }
+    .card {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 14px 16px;
+    }
+    .card .k { color: var(--muted); font-size: 0.8rem; margin-bottom: 6px; }
+    .card .v { font-size: 1.6rem; font-weight: 700; letter-spacing: -0.03em; }
+    .card.warn .v { color: var(--warn); }
+    .card.danger .v { color: var(--danger); }
+    .card.ok .v { color: var(--accent2); }
+    .grid2 {
+      display: grid;
+      grid-template-columns: 1.2fr 1fr;
+      gap: 16px;
+    }
+    @media (max-width: 980px) {
+      .field, .field.wide { grid-column: span 6; }
+      .grid2 { grid-template-columns: 1fr; }
+      header, main { padding-left: 16px; padding-right: 16px; }
+    }
+    h2 { margin: 0 0 12px; font-size: 1.05rem; }
+    h3 { margin: 0 0 8px; font-size: 0.95rem; color: var(--muted); font-weight: 600; }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 0.9rem;
+    }
+    th, td {
+      text-align: left;
+      padding: 8px 10px;
+      border-bottom: 1px solid var(--border);
+      vertical-align: top;
+    }
+    th { color: var(--muted); font-weight: 600; font-size: 0.78rem; text-transform: uppercase; letter-spacing: 0.04em; }
+    tr:hover td { background: rgba(255,255,255,0.02); }
+    .bar-wrap { display: flex; flex-direction: column; gap: 7px; }
+    .bar-row { display: grid; grid-template-columns: minmax(90px, 160px) 1fr 48px; gap: 8px; align-items: center; font-size: 0.86rem; }
+    .bar-track { height: 8px; background: var(--panel2); border-radius: 99px; overflow: hidden; }
+    .bar-fill { height: 100%; background: linear-gradient(90deg, var(--accent), #6ec0ff); border-radius: 99px; }
+    .bar-fill.alt { background: linear-gradient(90deg, var(--accent2), #7ee0b0); }
+    .bar-fill.warn { background: linear-gradient(90deg, var(--warn), #f0c878); }
+    .muted { color: var(--muted); }
+    .mono { font-family: var(--mono); font-size: 0.82rem; }
+    .status {
+      display: inline-block;
+      padding: 2px 8px;
+      border-radius: 999px;
+      font-size: 0.75rem;
+      font-weight: 650;
+      text-transform: uppercase;
+    }
+    .status.success { background: rgba(43,182,115,.18); color: #7ee0b0; }
+    .status.error { background: rgba(226,92,92,.18); color: #ff9b9b; }
+    .status.cancelled { background: rgba(140,140,160,.2); color: #c8c8d8; }
+    .status.processing, .status.pending { background: rgba(230,162,60,.18); color: #f0c878; }
+    .err { color: var(--danger); white-space: pre-wrap; margin: 8px 0 0; }
+    .empty { color: var(--muted); padding: 12px 0; }
+    details { margin-top: 8px; }
+    summary { cursor: pointer; color: var(--accent); }
+    .tabs { display: flex; gap: 6px; margin-bottom: 12px; flex-wrap: wrap; }
+    .tabs button { background: var(--chip); color: var(--text); border-color: var(--border); font-weight: 500; }
+    .tabs button.active { background: var(--accent); color: #041018; font-weight: 650; }
+    .hidden { display: none !important; }
+    .event-cards-panel {
+      margin-top: 12px;
+      padding: 14px;
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      background: var(--panel);
+    }
+    .event-cards {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
+      gap: 14px;
+      margin-top: 12px;
+    }
+    .event-card {
+      background: var(--panel2);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 0;
+      overflow: hidden;
+    }
+    .event-card .ec-row {
+      display: grid;
+      grid-template-columns: 110px 1fr;
+      gap: 10px;
+      padding: 10px 14px;
+      border-bottom: 1px solid var(--border);
+      align-items: start;
+    }
+    .event-card .ec-row:last-child { border-bottom: none; }
+    .event-card .ec-label {
+      color: var(--muted);
+      font-size: 0.75rem;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+      padding-top: 2px;
+    }
+    .event-card .ec-value {
+      font-size: 0.9rem;
+      line-height: 1.4;
+      word-break: break-word;
+    }
+    .event-card .ec-value.name { font-weight: 650; font-size: 1rem; }
+    .event-card .ec-value.desc {
+      color: var(--text);
+      white-space: pre-wrap;
+      max-height: 9.5em;
+      overflow: auto;
+    }
+    .event-card .ec-value.mono { font-family: var(--mono); font-size: 0.8rem; color: var(--muted); }
+    .event-card .meta {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      font-size: 0.75rem;
+    }
+    .event-card .pill {
+      display: inline-block;
+      padding: 2px 8px;
+      border-radius: 999px;
+      background: var(--chip);
+      border: 1px solid var(--border);
+      color: var(--text);
+    }
+    .event-card .pill.kw { border-color: rgba(110,192,255,.45); color: #9fd2ff; }
+    .event-card .pill.ai { border-color: rgba(126,224,176,.45); color: #7ee0b0; }
+    .event-card .pill.other { border-color: rgba(230,162,60,.45); color: #f0c878; }
+    .event-card .pill.enrich { border-color: rgba(180,140,255,.45); color: #cbb6ff; }
+    .event-card a.link {
+      color: var(--accent);
+      font-size: 0.85rem;
+      word-break: break-all;
+      text-decoration: none;
+    }
+    .event-card a.link:hover { text-decoration: underline; }
+    .range-label { font-family: var(--mono); font-size: 0.85rem; color: var(--muted); }
+    tr.run-row { cursor: pointer; }
+    tr.run-row.active td { background: rgba(61, 156, 240, 0.12); }
+    .run-detail {
+      margin-top: 14px;
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      background: var(--panel2);
+      overflow: hidden;
+    }
+    .run-detail-head {
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+      align-items: center;
+      padding: 10px 14px;
+      border-bottom: 1px solid var(--border);
+      background: var(--panel);
+    }
+    .run-detail-meta {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px 16px;
+      padding: 10px 14px;
+      font-size: 0.85rem;
+      color: var(--muted);
+      border-bottom: 1px solid var(--border);
+    }
+    .run-detail-meta strong { color: var(--text); font-weight: 600; }
+    .run-log {
+      margin: 0;
+      padding: 12px 14px;
+      max-height: 420px;
+      overflow: auto;
+      white-space: pre-wrap;
+      word-break: break-word;
+      font-family: var(--mono);
+      font-size: 0.78rem;
+      line-height: 1.45;
+      background: #0c1016;
+      color: #c9d6e5;
+    }
+    .run-log.error-log { color: #ffb4b4; border-top: 1px solid var(--border); }
+    .run-stats-json {
+      margin: 0;
+      padding: 12px 14px;
+      max-height: 240px;
+      overflow: auto;
+      font-family: var(--mono);
+      font-size: 0.78rem;
+      background: #0c1016;
+      color: #b8e0c8;
+      border-top: 1px solid var(--border);
+      white-space: pre-wrap;
+    }
+    button.ok { background: var(--accent2); color: #04140c; }
+    button.danger { background: var(--danger); color: #fff; border-color: transparent; }
+    .city-form {
+      display: grid;
+      grid-template-columns: 1.5fr 1.3fr 0.7fr 0.7fr auto auto;
+      gap: 6px;
+      align-items: center;
+    }
+    @media (max-width: 1100px) {
+      .city-form { grid-template-columns: 1fr 1fr; }
+    }
+    .city-form input, .city-form select {
+      width: 100%;
+      min-width: 0;
+    }
+    .hint-warn { color: var(--warn); font-size: 0.8rem; margin-top: 4px; }
+    .chips { display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0 12px; }
+    .chip-stat {
+      background: var(--chip);
+      border: 1px solid var(--border);
+      border-radius: 999px;
+      padding: 4px 10px;
+      font-size: 0.8rem;
+      color: var(--muted);
+    }
+    .toast {
+      position: fixed; right: 16px; bottom: 16px; max-width: 460px;
+      background: var(--panel); border: 1px solid var(--border);
+      padding: 12px 14px; border-radius: 8px; box-shadow: 0 8px 30px #0008;
+      display: none; z-index: 30; white-space: pre-wrap; font-size: 0.9rem;
+    }
+    .toast.show { display: block; }
+    .toast.ok { border-color: var(--accent2); }
+    .toast.err { border-color: var(--danger); }
+  </style>
+</head>
+<body>
+  <header>
+    <div>
+      <h1>Статистика парсинга</h1>
+      <div class="sub">События · ParseRuns · Backfill · города-кандидаты (discover / approve → main)</div>
+    </div>
+    <div style="display:flex;flex-wrap:wrap;gap:10px;align-items:center">
+      <a href="/parsing/events-ui" style="color:var(--accent);text-decoration:none;font-size:0.9rem;padding:8px 12px;border:1px solid var(--border);border-radius:8px;background:var(--panel)">Мероприятия</a>
+      <div class="range-label" id="rangeLabel">—</div>
+    </div>
+  </header>
+
+  <main>
+    <section class="panel">
+      <div class="filters">
+        <div class="field wide">
+          <label>Base URL second-сервера</label>
+          <input id="baseUrl" placeholder="http://localhost:4001" />
+        </div>
+        <div class="field wide">
+          <label>API Key (X-Api-Key)</label>
+          <input id="apiKey" type="password" placeholder="PARSING_SERVER_API_KEY" />
+        </div>
+        <div class="field">
+          <label>С</label>
+          <input id="from" type="datetime-local" />
+        </div>
+        <div class="field">
+          <label>По</label>
+          <input id="to" type="datetime-local" />
+        </div>
+        <div class="field full">
+          <label>Пресеты периода</label>
+          <div class="presets">
+            <button type="button" data-preset="prevWeek">Прошлая неделя</button>
+            <button type="button" data-preset="thisWeek">Текущая неделя</button>
+            <button type="button" data-preset="last7">7 дней</button>
+            <button type="button" data-preset="last30">30 дней</button>
+            <button type="button" data-preset="month">Этот месяц</button>
+          </div>
+        </div>
+        <div class="field full">
+          <label>Источники</label>
+          <div class="sources" id="sources"></div>
+        </div>
+        <div class="field full">
+          <div class="actions">
+            <button id="loadBtn" type="button">Загрузить</button>
+            <button id="selectAll" class="secondary" type="button">Все источники</button>
+            <button id="selectNone" class="secondary" type="button">Снять</button>
+          </div>
+          <div id="error" class="err hidden"></div>
+        </div>
+      </div>
+    </section>
+
+    <section class="cards" id="cards"></section>
+
+    <section class="panel">
+      <div class="tabs">
+        <button type="button" class="active" data-tab="overview">Обзор</button>
+        <button type="button" data-tab="sources">По источникам</button>
+        <button type="button" data-tab="geo">Страны / города</button>
+        <button type="button" data-tab="cats">Категории</button>
+        <button type="button" data-tab="runs">ParseRuns</button>
+        <button type="button" data-tab="backfill">Backfill</button>
+        <button type="button" data-tab="cities">Города-кандидаты</button>
+        <button type="button" data-tab="catcands">Категории кандидаты</button>
+      </div>
+
+      <div id="tab-overview">
+        <div class="grid2">
+          <div>
+            <h3>События по источникам</h3>
+            <div class="bar-wrap" id="overviewSources"></div>
+          </div>
+          <div>
+            <h3>Как определена категория</h3>
+            <div class="bar-wrap" id="overviewResolved"></div>
+            <h3 style="margin-top:16px">Проблемные</h3>
+            <div class="bar-wrap" id="overviewProblems"></div>
+          </div>
+        </div>
+      </div>
+
+      <div id="tab-sources" class="hidden">
+        <div id="sourceTables"></div>
+      </div>
+
+      <div id="tab-geo" class="hidden">
+        <div class="grid2">
+          <div>
+            <h3>Страны (top)</h3>
+            <div class="bar-wrap" id="geoCountries"></div>
+          </div>
+          <div>
+            <h3>Города (top)</h3>
+            <div class="bar-wrap" id="geoCities"></div>
+          </div>
+        </div>
+      </div>
+
+      <div id="tab-cats" class="hidden">
+        <div class="grid2">
+          <div>
+            <h3>Категории (сводка)</h3>
+            <div class="bar-wrap" id="catBars"></div>
+          </div>
+          <div>
+            <h3>Таблица</h3>
+            <div id="catTable"></div>
+          </div>
+        </div>
+      </div>
+
+      <div id="tab-runs" class="hidden">
+        <div style="border:1px solid var(--border);border-radius:10px;padding:12px;margin-bottom:14px;background:var(--panel)">
+          <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;justify-content:space-between">
+            <div>
+              <strong>Cron и ручной запуск</strong>
+              <div class="muted" style="font-size:0.85rem;margin-top:2px">Каждый job — Run / ON / OFF · live-лог parse run</div>
+            </div>
+            <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+              <button id="cronStopBtn" class="danger secondary" type="button">Выкл все parsers</button>
+              <button id="cronStartBtn" class="ok secondary" type="button">Вкл все</button>
+              <button type="button" class="danger" id="parseStopActiveBtn">Стоп активный run</button>
+            </div>
+          </div>
+          <div id="cronJobsTable" style="margin-top:12px"></div>
+          <div class="muted mono" id="parseActiveLabel" style="margin-top:8px;font-size:0.82rem">Активный run: —</div>
+          <pre id="parseLiveLog" class="run-log" style="margin-top:8px;max-height:280px;overflow:auto">Лог появится после запуска…</pre>
+        </div>
+        <div style="display:flex;gap:8px;margin-bottom:10px;flex-wrap:wrap;align-items:end">
+          <div>
+            <label>Статус run</label><br/>
+            <select id="runStatus">
+              <option value="">все</option>
+              <option value="success">success</option>
+              <option value="error">error</option>
+              <option value="processing">processing</option>
+              <option value="pending">pending</option>
+              <option value="cancelled">cancelled</option>
+            </select>
+          </div>
+          <button id="reloadRuns" class="secondary" type="button">Обновить runs</button>
+        </div>
+        <div class="muted" style="margin-bottom:8px;font-size:0.85rem">Кликни по строке — лог прогона. Активный run обновляется сам.</div>
+        <div id="runsTable"></div>
+        <div id="runDetail" class="run-detail hidden"></div>
+      </div>
+
+      <div id="tab-backfill" class="hidden">
+        <div class="muted" style="margin-bottom:12px;font-size:0.88rem">
+          Статистика прогонов <code>categorize-batch</code> (purpose=backfill) за тот же период и источники, что в фильтрах сверху.
+          Показывает keywords / ai / default_other, обогащение description с ParsedEvents.
+        </div>
+        <section class="cards" id="bfCards"></section>
+        <div class="grid2" style="margin-top:8px">
+          <div>
+            <h3>События по источникам</h3>
+            <div class="bar-wrap" id="bfOverviewSources"></div>
+          </div>
+          <div>
+            <h3>Как определена категория</h3>
+            <div class="bar-wrap" id="bfOverviewResolved"></div>
+            <h3 style="margin-top:16px">Проблемные</h3>
+            <div class="bar-wrap" id="bfOverviewProblems"></div>
+          </div>
+        </div>
+        <h3 style="margin-top:18px">По источникам</h3>
+        <div id="bfSourceTables"></div>
+        <div class="grid2" style="margin-top:12px">
+          <div>
+            <h3>Страны (top)</h3>
+            <div class="bar-wrap" id="bfGeoCountries"></div>
+          </div>
+          <div>
+            <h3>Города (top)</h3>
+            <div class="bar-wrap" id="bfGeoCities"></div>
+          </div>
+        </div>
+        <div class="grid2" style="margin-top:12px">
+          <div>
+            <h3>Категории (сводка)</h3>
+            <div class="bar-wrap" id="bfCatBars"></div>
+          </div>
+          <div>
+            <h3>Таблица категорий</h3>
+            <div id="bfCatTable"></div>
+          </div>
+        </div>
+        <h3 style="margin-top:18px">Backfill runs</h3>
+        <div class="muted" style="margin-bottom:8px;font-size:0.85rem">Кликни run — фильтр карточек по этому прогону. «Все» сбрасывает.</div>
+        <div id="bfRunsTable"></div>
+        <section class="event-cards-panel">
+          <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+            <h3 style="margin:0">Карточки событий</h3>
+            <button type="button" class="secondary" id="bfCardsShowAll">Все</button>
+            <span class="muted mono" id="bfCardsFilterLabel"></span>
+          </div>
+          <div class="muted" style="margin-top:6px;font-size:0.82rem">
+            Отдельные поля: название, описание, дата, цена, адрес, категория, ссылка, id.
+          </div>
+          <div id="bfEventCards" class="event-cards"></div>
+        </section>
+      </div>
+
+      <div id="tab-cities" class="hidden">
+        <div class="muted" style="margin-bottom:12px;font-size:0.88rem">
+          Frankfurt ≠ Frankfurt am Main. Страна и координаты вручную. Approve создаёт город на main и second, кандидат удаляется.
+        </div>
+        <div class="cards" id="cityMetricCards"></div>
+        <div class="chips" id="citySourceChips"></div>
+        <div style="display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap;align-items:end">
+          <div>
+            <label>Источник discover</label><br/>
+            <select id="cityDiscoverSource">
+              <option value="kontramarka">kontramarka</option>
+              <option value="eventim">eventim</option>
+              <option value="ticketmaster">ticketmaster</option>
+              <option value="israelinfo">israelinfo</option>
+              <option value="fienta">fienta</option>
+            </select>
+          </div>
+          <button id="cityDiscoverBtn" type="button">Discover</button>
+          <div>
+            <label>Фильтр списка</label><br/>
+            <select id="cityListSource">
+              <option value="">все источники</option>
+              <option value="kontramarka">kontramarka</option>
+              <option value="eventim">eventim</option>
+              <option value="ticketmaster">ticketmaster</option>
+              <option value="israelinfo">israelinfo</option>
+              <option value="fienta">fienta</option>
+            </select>
+          </div>
+          <div>
+            <label>Статус</label><br/>
+            <select id="cityStatus">
+              <option value="pending">pending</option>
+              <option value="rejected">rejected</option>
+            </select>
+          </div>
+          <div style="min-width:180px;flex:1">
+            <label>Поиск</label><br/>
+            <input id="cityQ" placeholder="часть названия…" />
+          </div>
+          <button id="cityReloadBtn" class="secondary" type="button">Обновить</button>
+          <button id="cityPrev" class="secondary" type="button">←</button>
+          <span class="mono" id="cityPageLabel">1</span>
+          <button id="cityNext" class="secondary" type="button">→</button>
+        </div>
+        <div class="muted mono" id="cityListMeta" style="margin-bottom:8px">—</div>
+        <div id="citySuggestionsTable"></div>
+      </div>
+
+      <div id="tab-catcands" class="hidden">
+        <div class="muted" style="margin-bottom:12px;font-size:0.88rem">
+          AI предлагает только отсутствующие в БД обобщённые категории.
+          Keywords собираются сразу при backfill; Approve создаёт EventsCategory на <b>main + second</b>.
+        </div>
+
+        <div class="panel" style="margin-bottom:16px">
+          <div style="display:flex;gap:12px;flex-wrap:wrap;align-items:end;margin-bottom:10px">
+            <div>
+              <label>Limit (пусто = все)</label><br/>
+              <input id="catBackfillLimit" type="number" min="1" max="5000" placeholder="напр. 200" style="width:120px" />
+            </div>
+            <label class="chip" style="display:inline-flex;align-items:center;gap:6px;padding:9px 11px;background:var(--chip);border:1px solid var(--border);border-radius:8px;cursor:pointer;text-transform:none;letter-spacing:0;font-size:0.9rem;color:var(--text)">
+              <input type="checkbox" id="catBackfillApply" />
+              Применить категорию на события
+            </label>
+            <button id="catBackfillStartBtn" class="ok" type="button">Запустить AI backfill</button>
+            <button id="catBackfillStopBtn" class="danger" type="button" disabled>Стоп</button>
+            <span class="muted mono" id="catBackfillStatus">idle</span>
+          </div>
+          <div class="muted" style="font-size:0.82rem;margin-bottom:8px">
+            <b>B+A:</b> 1) существующие категории с карточками (use/examples/NOT) ·
+            2) по оставшимся — discovery ≤20 новых (примеры только из того же ответа AI).
+            Invent на каждый title больше нет.
+          </div>
+          <pre class="run-log" id="catBackfillLog">— нет логов —</pre>
+        </div>
+
+        <div class="panel" style="margin-bottom:16px">
+          <div style="display:flex;gap:12px;flex-wrap:wrap;align-items:end;margin-bottom:10px">
+            <div>
+              <label>Max категорий</label><br/>
+              <input id="catConsolidateMax" type="number" min="5" max="20" value="20" style="width:90px" />
+            </div>
+            <button id="catConsolidateStartBtn" type="button">Discovery кандидатов (≤N)</button>
+            <button id="catConsolidateStopBtn" class="danger" type="button" disabled>Стоп</button>
+            <span class="muted mono" id="catConsolidateStatus">idle</span>
+          </div>
+          <div class="muted" style="font-size:0.82rem;margin-bottom:8px">
+            Только phase2: выборка «Другое» → до N новых категорий с проверенными примерами (pending заменяется).
+          </div>
+          <pre class="run-log" id="catConsolidateLog">— нет логов —</pre>
+        </div>
+
+        <div class="cards" id="catCandMetricCards"></div>
+        <div style="display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap;align-items:end">
+          <div>
+            <label>Статус</label><br/>
+            <select id="catCandStatus">
+              <option value="pending">pending</option>
+              <option value="rejected">rejected</option>
+            </select>
+          </div>
+          <div style="min-width:180px;flex:1">
+            <label>Поиск</label><br/>
+            <input id="catCandQ" placeholder="часть названия…" />
+          </div>
+          <button id="catCandReloadBtn" class="secondary" type="button">Обновить</button>
+          <button id="catCandExportBtn" class="secondary" type="button">Экспорт JSON</button>
+          <button id="catCandPrev" class="secondary" type="button">←</button>
+          <span class="mono" id="catCandPageLabel">1</span>
+          <button id="catCandNext" class="secondary" type="button">→</button>
+        </div>
+        <div class="muted mono" id="catCandListMeta" style="margin-bottom:8px">—</div>
+        <div id="catCandTable"></div>
+      </div>
+    </section>
+  </main>
+  <div class="toast" id="toast"></div>
+
+  <script>
+    const SOURCES = ['kontramarka', 'fienta', 'eventim', 'ticketmaster', 'israelinfo'];
+    const $ = (id) => document.getElementById(id);
+    const TABS = ['overview', 'sources', 'geo', 'cats', 'runs', 'backfill', 'cities', 'catcands'];
+
+    const state = {
+      stats: null,
+      backfillStats: null,
+      bfSelectedRunId: null,
+      runs: [],
+      selectedRunId: null,
+      countries: [],
+      cityPage: 1,
+      cityPerPage: 50,
+      cityTotal: 0,
+      cityItems: [],
+      cityMetrics: null,
+      catCandPage: 1,
+      catCandPerPage: 50,
+      catCandTotal: 0,
+      activeParseRunId: null,
+      parsePollTimer: null,
+      cronEnabled: null,
+      cronJobs: [],
+    };
+
+    function toast(msg, ok = true) {
+      const el = $('toast');
+      el.textContent = msg;
+      el.className = 'toast show ' + (ok ? 'ok' : 'err');
+      clearTimeout(toast._t);
+      toast._t = setTimeout(() => { el.className = 'toast'; }, 5500);
+    }
+
+    function pad(n) { return String(n).padStart(2, '0'); }
+    function toLocalInput(d) {
+      const x = new Date(d);
+      return `${x.getFullYear()}-${pad(x.getMonth()+1)}-${pad(x.getDate())}T${pad(x.getHours())}:${pad(x.getMinutes())}`;
+    }
+    function fromLocalInput(v) {
+      if (!v) return null;
+      return new Date(v);
+    }
+    function startOfUtcDay(d) {
+      return new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()));
+    }
+    function mondayUtc(d = new Date()) {
+      const x = startOfUtcDay(d);
+      const day = x.getUTCDay();
+      const sinceMon = (day + 6) % 7;
+      x.setUTCDate(x.getUTCDate() - sinceMon);
+      return x;
+    }
+    function applyPreset(name) {
+      const now = new Date();
+      let from; let to;
+      if (name === 'prevWeek') {
+        const thisMon = mondayUtc(now);
+        to = thisMon;
+        from = new Date(thisMon); from.setUTCDate(from.getUTCDate() - 7);
+      } else if (name === 'thisWeek') {
+        from = mondayUtc(now);
+        to = now;
+      } else if (name === 'last7') {
+        to = now;
+        from = new Date(now.getTime() - 7 * 86400000);
+      } else if (name === 'last30') {
+        to = now;
+        from = new Date(now.getTime() - 30 * 86400000);
+      } else if (name === 'month') {
+        from = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1));
+        to = now;
+      }
+      $('from').value = toLocalInput(from);
+      $('to').value = toLocalInput(to);
+    }
+
+    function selectedSources() {
+      return [...document.querySelectorAll('#sources input:checked')].map((el) => el.value);
+    }
+
+    function renderSourceChips() {
+      $('sources').innerHTML = SOURCES.map((s) => `
+        <label class="chip"><input type="checkbox" value="${s}" checked /> ${s}</label>
+      `).join('');
+    }
+
+    function saveCreds() {
+      localStorage.setItem('nomad_stats_base', $('baseUrl').value.trim());
+      localStorage.setItem('nomad_stats_key', $('apiKey').value.trim());
+    }
+    function loadCreds() {
+      const origin = window.location.origin.replace(/\/$/, '');
+      const saved = (localStorage.getItem('nomad_stats_base') || '').replace(/\/$/, '');
+      // Stats-UI is served by second-server: prefer current host over a stale remote in localStorage
+      // (common cause of empty Backfill — local runs, Base URL still pointing at prod).
+      const savedIsLocal = /localhost|127\.0\.0\.1/.test(saved);
+      const originIsLocal = /localhost|127\.0\.0\.1/.test(origin);
+      if (originIsLocal && saved && !savedIsLocal) {
+        $('baseUrl').value = origin;
+      } else {
+        $('baseUrl').value = saved || origin;
+      }
+      $('apiKey').value = localStorage.getItem('nomad_stats_key') || '';
+    }
+
+    async function api(path, opts = {}) {
+      const base = $('baseUrl').value.replace(/\/$/, '');
+      const key = $('apiKey').value.trim();
+      if (!key) throw new Error('Укажи API Key');
+      const headers = {
+        'X-Api-Key': key,
+        Accept: 'application/json',
+        ...(opts.body ? { 'Content-Type': 'application/json' } : {}),
+        ...(opts.headers || {}),
+      };
+      const res = await fetch(`${base}${path}`, { ...opts, headers });
+      const text = await res.text();
+      let json;
+      try { json = JSON.parse(text); } catch { throw new Error(`Bad JSON (${res.status}): ${text.slice(0, 200)}`); }
+      if (!res.ok || json.status === 'error') throw new Error(json.message || `HTTP ${res.status}`);
+      return json;
+    }
+
+    function showError(msg) {
+      const el = $('error');
+      if (!msg) { el.classList.add('hidden'); el.textContent = ''; return; }
+      el.classList.remove('hidden');
+      el.textContent = msg;
+    }
+
+    function bars(list, max, altClass = '') {
+      if (!list?.length) return '<div class="empty">Нет данных</div>';
+      const m = max || Math.max(...list.map((x) => x.count), 1);
+      return list.slice(0, 15).map((row) => `
+        <div class="bar-row">
+          <div title="${row.id || ''}">${escapeHtml(row.name || row.id || '—')}</div>
+          <div class="bar-track"><div class="bar-fill ${altClass}" style="width:${Math.max(2, (row.count / m) * 100)}%"></div></div>
+          <div class="mono">${row.count}</div>
+        </div>
+      `).join('');
+    }
+
+    function escapeHtml(s) {
+      return String(s ?? '').replace(/[&<>"']/g, (c) => ({
+        '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
+      }[c]));
+    }
+
+    function renderCards(summary) {
+      const pct = (a, b) => (b ? Math.round((a / b) * 1000) / 10 : 0);
+      $('cards').innerHTML = `
+        <div class="card ok"><div class="k">Всего событий</div><div class="v">${summary.total || 0}</div></div>
+        <div class="card warn"><div class="k">Без категории («Другое»/fail)</div><div class="v">${summary.noCategory || 0}</div><div class="muted mono">${pct(summary.noCategory, summary.total)}%</div></div>
+        <div class="card warn"><div class="k">После AI без категории</div><div class="v">${summary.noCategoryAfterAi || 0}</div></div>
+        <div class="card danger"><div class="k">Без города</div><div class="v">${summary.noCity || 0}</div><div class="muted mono">${pct(summary.noCity, summary.total)}%</div></div>
+        <div class="card"><div class="k">Стран (уник.)</div><div class="v">${(summary.countries || []).filter(x => x.id !== 'unknown').length}</div></div>
+        <div class="card"><div class="k">Городов (уник.)</div><div class="v">${(summary.cities || []).filter(x => x.id !== 'unknown').length}</div></div>
+      `;
+    }
+
+    function renderOverview(stats) {
+      const srcRows = Object.entries(stats.bySource || {}).map(([name, row]) => ({ name, id: name, count: row.total || 0 }));
+      srcRows.sort((a, b) => b.count - a.count);
+      $('overviewSources').innerHTML = bars(srcRows, null, 'alt');
+      $('overviewResolved').innerHTML = bars(stats.summary?.resolvedBy || [], null);
+      $('overviewProblems').innerHTML = bars([
+        { name: 'noCategory', count: stats.summary?.noCategory || 0 },
+        { name: 'noCategoryAfterAi', count: stats.summary?.noCategoryAfterAi || 0 },
+        { name: 'noCity', count: stats.summary?.noCity || 0 },
+      ], null, 'warn');
+    }
+
+    function renderSources(stats) {
+      const html = Object.entries(stats.bySource || {}).map(([src, row]) => `
+        <div style="margin-bottom:18px">
+          <h2>${escapeHtml(src)} <span class="muted mono">total=${row.total}</span></h2>
+          <table>
+            <thead><tr><th>Метрика</th><th>Значение</th></tr></thead>
+            <tbody>
+              <tr><td>Всего</td><td class="mono">${row.total}</td></tr>
+              <tr><td>Без категории</td><td class="mono">${row.noCategory}</td></tr>
+              <tr><td>Без категории после AI</td><td class="mono">${row.noCategoryAfterAi}</td></tr>
+              <tr><td>Без города</td><td class="mono">${row.noCity}</td></tr>
+            </tbody>
+          </table>
+          <div class="grid2" style="margin-top:10px">
+            <div><h3>Топ категории</h3>${bars(row.categories || [], null)}</div>
+            <div><h3>Resolved by</h3>${bars(row.resolvedBy || [], null, 'alt')}</div>
+          </div>
+          <details>
+            <summary>Страны / города</summary>
+            <div class="grid2" style="margin-top:8px">
+              <div>${bars(row.countries || [], null)}</div>
+              <div>${bars(row.cities || [], null)}</div>
+            </div>
+          </details>
+        </div>
+      `).join('') || '<div class="empty">Нет данных по источникам</div>';
+      $('sourceTables').innerHTML = html;
+    }
+
+    function renderGeo(stats) {
+      $('geoCountries').innerHTML = bars(stats.summary?.countries || [], null);
+      $('geoCities').innerHTML = bars(stats.summary?.cities || [], null, 'alt');
+    }
+
+    function renderCats(stats) {
+      const list = stats.summary?.categories || [];
+      $('catBars').innerHTML = bars(list, null);
+      $('catTable').innerHTML = list.length ? `
+        <table>
+          <thead><tr><th>Категория</th><th>ID</th><th>Count</th></tr></thead>
+          <tbody>
+            ${list.map((r) => `<tr><td>${escapeHtml(r.name)}</td><td class="mono">${escapeHtml(r.id)}</td><td class="mono">${r.count}</td></tr>`).join('')}
+          </tbody>
+        </table>` : '<div class="empty">Нет данных</div>';
+    }
+
+    function renderBackfillCards(summary) {
+      const pct = (a, b) => (b ? Math.round((a / b) * 1000) / 10 : 0);
+      const ai = summary.openaiUsage || {};
+      $('bfCards').innerHTML = `
+        <div class="card ok"><div class="k">Всего (backfill)</div><div class="v">${summary.total || 0}</div><div class="muted mono">runs=${summary.runs || 0}</div></div>
+        <div class="card warn"><div class="k">Без категории («Другое»/fail)</div><div class="v">${summary.noCategory || 0}</div><div class="muted mono">${pct(summary.noCategory, summary.total)}%</div></div>
+        <div class="card warn"><div class="k">После AI без категории</div><div class="v">${summary.noCategoryAfterAi || 0}</div></div>
+        <div class="card danger"><div class="k">Без города</div><div class="v">${summary.noCity || 0}</div><div class="muted mono">${pct(summary.noCity, summary.total)}%</div></div>
+        <div class="card"><div class="k">Desc обогащено</div><div class="v">${summary.enrichedDescriptions || 0}</div></div>
+        <div class="card"><div class="k">OpenAI tokens</div><div class="v mono" style="font-size:1.1rem">${ai.total_tokens ?? '—'}</div>
+          <div class="muted mono">in=${ai.prompt_tokens ?? 0} out=${ai.completion_tokens ?? 0}</div></div>
+      `;
+    }
+
+    function resolvedPillClass(by) {
+      if (by === 'keywords') return 'kw';
+      if (by === 'ai') return 'ai';
+      if (by === 'default_other') return 'other';
+      return '';
+    }
+
+    function formatCardDate(c) {
+      if (c.holding_date) return c.holding_date;
+      const a = c.date_start ? new Date(c.date_start) : null;
+      const b = c.date_end ? new Date(c.date_end) : null;
+      const fmt = (d) => (d && !Number.isNaN(d.getTime())
+        ? d.toLocaleString('ru-RU', { dateStyle: 'medium', timeStyle: 'short' })
+        : '');
+      const sa = fmt(a);
+      const sb = fmt(b);
+      if (sa && sb && sa !== sb) return `${sa} — ${sb}`;
+      return sa || sb || '—';
+    }
+
+    function formatCardPrice(c) {
+      const cur = c.currency ? ` ${c.currency}` : '';
+      if (c.min_price != null && c.max_price != null) {
+        if (c.min_price === c.max_price) return `${c.min_price}${cur}`;
+        return `${c.min_price} – ${c.max_price}${cur}`;
+      }
+      if (c.min_price != null) return `от ${c.min_price}${cur}`;
+      if (c.max_price != null) return `до ${c.max_price}${cur}`;
+      return '—';
+    }
+
+    function renderBfEventCards(cards) {
+      const el = $('bfEventCards');
+      if (!cards?.length) {
+        el.innerHTML = '<div class="empty">Нет карточек за период (нужен новый backfill с полями в run)</div>';
+        return;
+      }
+      el.innerHTML = cards.map((c) => {
+        const desc = (c.description || '').trim() || '—';
+        const link = c.website
+          ? `<a class="link" href="${escapeHtml(c.website)}" target="_blank" rel="noopener">${escapeHtml(c.website)}</a>`
+          : '—';
+        const geo = [c.city_name, c.country_name].filter((x) => x && x !== '—').join(', ') || '—';
+        const ids = [
+          c.event_id ? `event ${c.event_id}` : '',
+          c.ticketmaster_id ? `tm ${c.ticketmaster_id}` : '',
+          c.run_id ? `run ${c.run_id}` : '',
+        ].filter(Boolean).join('\n') || '—';
+        return `<article class="event-card">
+          <div class="ec-row"><div class="ec-label">Название</div><div class="ec-value name">${escapeHtml(c.name || '—')}</div></div>
+          <div class="ec-row"><div class="ec-label">Описание</div><div class="ec-value desc">${escapeHtml(desc)}</div></div>
+          <div class="ec-row"><div class="ec-label">Дата</div><div class="ec-value">${escapeHtml(formatCardDate(c))}</div></div>
+          <div class="ec-row"><div class="ec-label">Цена</div><div class="ec-value">${escapeHtml(formatCardPrice(c))}</div></div>
+          <div class="ec-row"><div class="ec-label">Адрес</div><div class="ec-value">${escapeHtml(c.address || '—')}</div></div>
+          <div class="ec-row"><div class="ec-label">Гео</div><div class="ec-value">${escapeHtml(geo)}</div></div>
+          <div class="ec-row"><div class="ec-label">Категория</div><div class="ec-value">
+            <div class="meta">
+              <span class="pill">${escapeHtml(c.category_name || '—')}</span>
+              <span class="pill ${resolvedPillClass(c.resolved_by)}">${escapeHtml(c.resolved_by || '—')}</span>
+              <span class="pill">${escapeHtml(c.source || '—')}</span>
+              ${c.enriched_description ? '<span class="pill enrich">desc+</span>' : ''}
+              ${c.specialization ? `<span class="pill">${escapeHtml(c.specialization)}</span>` : ''}
+            </div>
+          </div></div>
+          <div class="ec-row"><div class="ec-label">Ссылка</div><div class="ec-value">${link}</div></div>
+          <div class="ec-row"><div class="ec-label">ID</div><div class="ec-value mono">${escapeHtml(ids)}</div></div>
+        </article>`;
+      }).join('');
+    }
+
+    function refreshBfEventCards() {
+      const stats = state.backfillStats;
+      if (!stats) {
+        renderBfEventCards([]);
+        return;
+      }
+      let cards = stats.eventCards || [];
+      if (state.bfSelectedRunId) {
+        const run = (stats.backfillRuns || []).find((r) => String(r._id) === String(state.bfSelectedRunId));
+        cards = run?.results || [];
+        $('bfCardsFilterLabel').textContent = `run ${state.bfSelectedRunId} · ${cards.length}`;
+      } else {
+        $('bfCardsFilterLabel').textContent = `все · ${cards.length}`;
+      }
+      renderBfEventCards(cards);
+    }
+
+    function renderBackfill(stats) {
+      if (!stats || !(stats.summary?.total)) {
+        $('bfCards').innerHTML = `<div class="empty">
+          Нет данных backfill за выбранный период.<br/>
+          Сейчас в БД прогоны за <b>текущую</b> неделю — нажми пресет «Текущая неделя» или «7 дней» и Загрузить.
+        </div>`;
+        $('bfRunsTable').innerHTML = '';
+        $('bfSourceTables').innerHTML = '';
+        ['bfOverviewSources','bfOverviewResolved','bfOverviewProblems','bfGeoCountries','bfGeoCities','bfCatBars','bfCatTable']
+          .forEach((id) => { const n = $(id); if (n) n.innerHTML = ''; });
+        renderBfEventCards([]);
+        return;
+      }
+      const summary = stats.summary || {};
+      renderBackfillCards(summary);
+
+      const srcRows = Object.entries(stats.bySource || {}).map(([name, row]) => ({ name, id: name, count: row.total || 0 }));
+      srcRows.sort((a, b) => b.count - a.count);
+      $('bfOverviewSources').innerHTML = bars(srcRows, null, 'alt');
+      $('bfOverviewResolved').innerHTML = bars(summary.resolvedBy || [], null);
+      $('bfOverviewProblems').innerHTML = bars([
+        { name: 'noCategory', count: summary.noCategory || 0 },
+        { name: 'noCategoryAfterAi', count: summary.noCategoryAfterAi || 0 },
+        { name: 'noCity', count: summary.noCity || 0 },
+        { name: 'enrichedDescriptions', count: summary.enrichedDescriptions || 0 },
+      ], null, 'warn');
+
+      $('bfSourceTables').innerHTML = Object.entries(stats.bySource || {}).map(([src, row]) => `
+        <div style="margin-bottom:18px">
+          <h2>${escapeHtml(src)} <span class="muted mono">total=${row.total}</span></h2>
+          <table>
+            <thead><tr><th>Метрика</th><th>Значение</th></tr></thead>
+            <tbody>
+              <tr><td>Всего</td><td class="mono">${row.total}</td></tr>
+              <tr><td>Без категории</td><td class="mono">${row.noCategory}</td></tr>
+              <tr><td>Без категории после AI</td><td class="mono">${row.noCategoryAfterAi}</td></tr>
+              <tr><td>Без города</td><td class="mono">${row.noCity}</td></tr>
+            </tbody>
+          </table>
+          <div class="grid2" style="margin-top:10px">
+            <div><h3>Топ категории</h3>${bars(row.categories || [], null)}</div>
+            <div><h3>Resolved by</h3>${bars(row.resolvedBy || [], null, 'alt')}</div>
+          </div>
+        </div>
+      `).join('') || '<div class="empty">Нет данных по источникам</div>';
+
+      $('bfGeoCountries').innerHTML = bars(summary.countries || [], null);
+      $('bfGeoCities').innerHTML = bars(summary.cities || [], null, 'alt');
+
+      const list = summary.categories || [];
+      $('bfCatBars').innerHTML = bars(list, null);
+      $('bfCatTable').innerHTML = list.length ? `
+        <table>
+          <thead><tr><th>Категория</th><th>ID</th><th>Count</th></tr></thead>
+          <tbody>
+            ${list.map((r) => `<tr><td>${escapeHtml(r.name)}</td><td class="mono">${escapeHtml(r.id)}</td><td class="mono">${r.count}</td></tr>`).join('')}
+          </tbody>
+        </table>` : '<div class="empty">Нет данных</div>';
+
+      const runs = stats.backfillRuns || [];
+      $('bfRunsTable').innerHTML = runs.length ? `
+        <table>
+          <thead>
+            <tr><th>Когда</th><th>Total</th><th>Resolved</th><th>Desc+</th><th>OpenAI</th><th>Run id</th></tr>
+          </thead>
+          <tbody>
+            ${runs.map((r) => {
+              const br = r.byResolved || {};
+              const ai = r.openaiUsage || {};
+              const id = String(r._id);
+              const active = state.bfSelectedRunId === id ? ' active' : '';
+              return `<tr class="bf-run-row${active}" data-run-id="${escapeHtml(id)}" style="cursor:pointer">
+                <td class="mono">${escapeHtml(new Date(r.createdAt).toISOString())}</td>
+                <td class="mono">${r.total || 0}</td>
+                <td class="mono">kw${br.keywords || 0} ai${br.ai || 0} other${br.default_other || 0}</td>
+                <td class="mono">${r.enrichedDescriptions || 0}</td>
+                <td class="mono">${ai.total_tokens != null ? `${ai.total_tokens} (out ${ai.completion_tokens || 0})` : '—'}</td>
+                <td class="mono">${escapeHtml(id)}</td>
+              </tr>`;
+            }).join('')}
+          </tbody>
+        </table>` : '<div class="empty">Нет backfill runs за период</div>';
+
+      $('bfRunsTable').querySelectorAll('tr.bf-run-row').forEach((row) => {
+        row.addEventListener('click', () => {
+          state.bfSelectedRunId = row.dataset.runId;
+          renderBackfill(state.backfillStats);
+        });
+      });
+
+      refreshBfEventCards();
+    }
+
+    function parseStatsJson(raw) {
+      if (!raw) return {};
+      if (typeof raw === 'object') return raw;
+      try { return JSON.parse(raw); } catch { return {}; }
+    }
+
+    function renderRuns(runs) {
+      if (!runs?.length) {
+        $('runsTable').innerHTML = '<div class="empty">Нет ParseRuns за период</div>';
+        $('runDetail').classList.add('hidden');
+        return;
+      }
+      $('runsTable').innerHTML = `
+        <table>
+          <thead>
+            <tr>
+              <th>Когда</th><th>Source</th><th>Status</th>
+              <th>Upsert</th><th>Process</th><th>OpenAI</th><th>Error</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${runs.map((r) => {
+              const id = String(r._id);
+              const st = parseStatsJson(r.statistics);
+              const up = st.upsert || {};
+              const pr = st.process || {};
+              const kw = pr.categorizedByKeywords ?? up.categorizedByKeywords ?? 0;
+              const aiN = pr.categorizedByAi ?? up.categorizedByAi ?? 0;
+              const otherN = pr.noCategoryAfterAi ?? up.noCategoryAfterAi ?? 0;
+              const ai = pr.openaiUsage || up.openaiUsage || st.openaiUsage || {};
+              const active = state.selectedRunId === id ? ' active' : '';
+              return `<tr class="run-row${active}" data-run-id="${escapeHtml(id)}">
+                <td class="mono">${escapeHtml(new Date(r.createdAt || r.startedAt).toISOString())}</td>
+                <td>${escapeHtml(r.source)}</td>
+                <td><span class="status ${escapeHtml(r.status || '')}">${escapeHtml(r.status || '—')}</span></td>
+                <td class="mono">i${up.inserted || 0}/u${up.updated || 0}/s${up.skipped || 0}</td>
+                <td class="mono">kw${kw} ai${aiN} other${otherN} city∅${pr.noCity || 0}</td>
+                <td class="mono">${ai.total_tokens != null ? ai.total_tokens + ' tok' : '—'}</td>
+                <td class="mono" style="max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${escapeHtml(r.errorText || '')}">${escapeHtml((r.errorText || '').slice(0, 80) || '—')}</td>
+              </tr>`;
+            }).join('')}
+          </tbody>
+        </table>`;
+
+      $('runsTable').querySelectorAll('tr.run-row').forEach((row) => {
+        row.addEventListener('click', () => {
+          openRunDetail(row.dataset.runId).catch((e) => showError(e.message || String(e)));
+        });
+      });
+    }
+
+    function renderRunDetail(payload) {
+      const run = payload.run || {};
+      const id = String(run._id || state.selectedRunId || '');
+      const st = parseStatsJson(run.statistics);
+      const info = (run.infoText || '').trim() || 'Лог пуст';
+      const err = (run.errorText || '').trim();
+      const panel = $('runDetail');
+      panel.classList.remove('hidden');
+      panel.innerHTML = `
+        <div class="run-detail-head">
+          <div>
+            <strong>${escapeHtml(run.source || '—')}</strong>
+            <span class="status ${escapeHtml(run.status || '')}" style="margin-left:8px">${escapeHtml(run.status || '—')}</span>
+            <div class="mono muted" style="margin-top:4px">${escapeHtml(id)}</div>
+          </div>
+          <button type="button" class="secondary" id="closeRunDetail">Закрыть</button>
+        </div>
+        <div class="run-detail-meta">
+          <div>started: <strong class="mono">${escapeHtml(run.startedAt || run.createdAt || '—')}</strong></div>
+          <div>finished: <strong class="mono">${escapeHtml(run.finishedAt || '—')}</strong></div>
+          <div>events in run: <strong class="mono">${payload.totalEvents ?? '—'}</strong></div>
+        </div>
+        <pre class="run-log">${escapeHtml(info)}</pre>
+        ${err ? `<pre class="run-log error-log">${escapeHtml(err)}</pre>` : ''}
+        <pre class="run-stats-json">${escapeHtml(JSON.stringify(st, null, 2))}</pre>
+      `;
+      $('closeRunDetail').onclick = () => {
+        panel.classList.add('hidden');
+        state.selectedRunId = null;
+        renderRuns(state.runs);
+      };
+    }
+
+    async function openRunDetail(runId) {
+      showError('');
+      state.selectedRunId = runId;
+      renderRuns(state.runs);
+      const panel = $('runDetail');
+      panel.classList.remove('hidden');
+      panel.innerHTML = '<div class="run-detail-head"><div class="muted">Загрузка лога…</div></div>';
+      const data = await api(`/parsing/results/${encodeURIComponent(runId)}`);
+      renderRunDetail(data);
+    }
+
+    async function loadStats() {
+      showError('');
+      saveCreds();
+      const from = fromLocalInput($('from').value);
+      const to = fromLocalInput($('to').value);
+      if (!from || !to) throw new Error('Укажи период from/to');
+      if (to <= from) throw new Error('«По» должно быть позже «С»');
+      const sources = selectedSources();
+      if (!sources.length) throw new Error('Выбери хотя бы один источник');
+
+      $('loadBtn').disabled = true;
+      try {
+        const qs = new URLSearchParams({
+          from: from.toISOString(),
+          to: to.toISOString(),
+          sources: sources.join(','),
+        });
+        const stats = await api(`/parsing/stats/weekly?${qs}`);
+        state.stats = stats;
+        $('rangeLabel').textContent = `${new Date(stats.from).toISOString()} → ${new Date(stats.to).toISOString()}`;
+        renderCards(stats.summary || {});
+        renderOverview(stats);
+        renderSources(stats);
+        renderGeo(stats);
+        renderCats(stats);
+        try {
+          const bf = await api(`/parsing/stats/backfill?${qs}`);
+          state.backfillStats = bf;
+          renderBackfill(bf);
+        } catch (e) {
+          state.backfillStats = null;
+          const base = $('baseUrl').value.replace(/\/$/, '');
+          const hint = /not found/i.test(String(e.message || ''))
+            ? `<br/>Эндпоинт backfill недоступен на <code>${escapeHtml(base)}</code>. `
+              + `Локальные тестовые runs смотри на <code>http://localhost:4001</code> `
+              + `(поставь Base URL = localhost и Загрузить).`
+            : '';
+          $('bfCards').innerHTML = `<div class="empty">Backfill stats: ${escapeHtml(e.message || e)}${hint}</div>`;
+          renderBfEventCards([]);
+        }
+        await loadRuns();
+      } finally {
+        $('loadBtn').disabled = false;
+      }
+    }
+
+    async function loadRuns() {
+      const from = fromLocalInput($('from').value);
+      const to = fromLocalInput($('to').value);
+      const sources = selectedSources();
+      const status = $('runStatus').value;
+      const qs = new URLSearchParams({
+        page: '1',
+        per_page: '50',
+      });
+      if (from) qs.set('from', from.toISOString());
+      if (to) qs.set('to', to.toISOString());
+      if (sources.length) qs.set('source', sources.join(','));
+      if (status) qs.set('status', status);
+      const data = await api(`/parsing/runs?${qs}`);
+      state.runs = data.runs || [];
+      renderRuns(state.runs);
+
+      // Attach stop/poll to newest in-progress run (cron / other tab / page reload).
+      const active = (state.runs || []).find((r) => (
+        r && !['success', 'error', 'cancelled'].includes(r.status)
+      ));
+      if (active?._id) {
+        const id = String(active._id);
+        if (state.activeParseRunId !== id || !state.parsePollTimer) {
+          startParsePoll(id);
+        } else {
+          setActiveParseUi(id, active.source, active.status);
+        }
+      } else if (!state.parsePollTimer) {
+        setActiveParseUi(null);
+      }
+    }
+
+    function renderCronStatus(cron) {
+      state.cronEnabled = cron?.enabled !== false;
+      state.cronJobs = cron?.jobs || [];
+      const el = $('cronJobsTable');
+      if (!el) return;
+      if (!state.cronJobs.length) {
+        el.innerHTML = '<div class="empty">Нет cron jobs</div>';
+        return;
+      }
+      el.innerHTML = `
+        <table>
+          <thead>
+            <tr>
+              <th>Job</th><th>Schedule (UTC)</th><th>Kind</th><th>Status</th><th></th>
+            </tr>
+          </thead>
+          <tbody>
+            ${state.cronJobs.map((j) => `
+              <tr data-cron-id="${escapeHtml(j.id)}">
+                <td><strong>${escapeHtml(j.label)}</strong><div class="mono muted" style="font-size:0.75rem">${escapeHtml(j.id)}</div></td>
+                <td class="mono">${escapeHtml(j.expr)}</td>
+                <td>${escapeHtml(j.kind)}${j.source ? ` · ${escapeHtml(j.source)}` : ''}</td>
+                <td><span class="status ${j.enabled ? 'success' : 'cancelled'}">${j.enabled ? 'ON' : 'OFF'}</span></td>
+                <td style="white-space:nowrap">
+                  <button type="button" class="ok btn-cron-run" data-id="${escapeHtml(j.id)}">Run</button>
+                  <button type="button" class="secondary btn-cron-on" data-id="${escapeHtml(j.id)}" ${j.enabled ? 'disabled' : ''}>ON</button>
+                  <button type="button" class="danger btn-cron-off" data-id="${escapeHtml(j.id)}" ${j.enabled ? '' : 'disabled'}>OFF</button>
+                </td>
+              </tr>
+            `).join('')}
+          </tbody>
+        </table>`;
+    }
+
+    async function loadCronStatus() {
+      const data = await api('/parsing/cron');
+      renderCronStatus(data.cron);
+    }
+
+    async function runCronJobUi(jobId) {
+      saveCreds();
+      const data = await api(`/parsing/cron/${encodeURIComponent(jobId)}/run`, {
+        method: 'POST',
+        body: '{}',
+      });
+      const result = data.result || {};
+      if (result.runId) {
+        toast(`${jobId} → run ${result.runId}`);
+        startParsePoll(result.runId);
+        await loadRuns().catch(() => {});
+      } else if (result.stats) {
+        toast(`${jobId}: dict sync ok`);
+        $('parseLiveLog').textContent = JSON.stringify(result.stats, null, 2);
+      } else if (result.result) {
+        toast(`${jobId}: cleanup ok`);
+        $('parseLiveLog').textContent = JSON.stringify(result.result, null, 2);
+      } else {
+        toast(`${jobId}: ${JSON.stringify(result)}`);
+      }
+      if (data.cron) renderCronStatus(data.cron);
+    }
+
+    function stopParsePoll() {
+      if (state.parsePollTimer) {
+        clearInterval(state.parsePollTimer);
+        state.parsePollTimer = null;
+      }
+    }
+
+    function setActiveParseUi(runId, source, status) {
+      state.activeParseRunId = runId || null;
+      $('parseActiveLabel').textContent = runId
+        ? `Активный run: ${source || '—'} · ${status || '…'} · ${runId}`
+        : 'Активный run: —';
+      // Keep clickable: click handler re-fetches runs if this tab never started the parse.
+      const finished = ['success', 'error', 'cancelled'].includes(status);
+      $('parseStopActiveBtn').disabled = Boolean(runId) && finished;
+    }
+
+    async function refreshActiveParseLog() {
+      if (!state.activeParseRunId) return;
+      try {
+        const data = await api(`/parsing/results/${encodeURIComponent(state.activeParseRunId)}`);
+        const run = data.run || {};
+        const info = (run.infoText || '').trim() || 'Лог пуст';
+        const err = (run.errorText || '').trim();
+        $('parseLiveLog').textContent = err ? `${info}\n\n--- ERROR ---\n${err}` : info;
+        $('parseLiveLog').scrollTop = $('parseLiveLog').scrollHeight;
+        setActiveParseUi(state.activeParseRunId, run.source, run.status);
+        if (['success', 'error', 'cancelled'].includes(run.status)) {
+          stopParsePoll();
+          loadRuns().catch(() => {});
+          toast(`Parse ${run.source}: ${run.status}`, run.status === 'success');
+        }
+      } catch (e) {
+        $('parseLiveLog').textContent = `Ошибка чтения лога: ${e.message || e}`;
+      }
+    }
+
+    function startParsePoll(runId) {
+      stopParsePoll();
+      state.activeParseRunId = runId;
+      setActiveParseUi(runId, '…', 'processing');
+      refreshActiveParseLog();
+      state.parsePollTimer = setInterval(() => {
+        refreshActiveParseLog().catch(() => {});
+      }, 2500);
+    }
+
+    async function startParseSource(source) {
+      saveCreds();
+      const data = await api('/parsing/create', {
+        method: 'POST',
+        body: JSON.stringify({
+          source,
+          meta: { specialization: 'Event' },
+        }),
+      });
+      toast(`${source} запущен`);
+      startParsePoll(data.runId);
+      await loadRuns().catch(() => {});
+      return data.runId;
+    }
+
+    async function startAllParsers() {
+      saveCreds();
+      const started = [];
+      const failed = [];
+      for (const source of SOURCES) {
+        try {
+          // eslint-disable-next-line no-await-in-loop
+          const id = await startParseSource(source);
+          started.push(`${source}:${id}`);
+        } catch (e) {
+          failed.push(`${source}: ${e.message || e}`);
+        }
+      }
+      if (started.length) toast(`Старт: ${started.length}. Лог — последний успешный.`);
+      if (failed.length) toast(failed.join(' | '), false);
+    }
+
+    function countryOptionsHtml(selected = '') {
+      return state.countries.map((c) =>
+        `<option value="${escapeHtml(c._id)}"${String(c._id) === String(selected) ? ' selected' : ''}>${escapeHtml(c.name)}</option>`
+      ).join('');
+    }
+
+    function renderCityMetrics(m) {
+      state.cityMetrics = m || {};
+      const cards = [
+        ['Pending', m.pending || 0, 'warn'],
+        ['Rejected', m.rejected || 0, ''],
+        ['Dup hint', m.pendingWithDuplicateHint || 0, ''],
+        ['Cities DB', m.dict?.cities ?? '—', 'ok'],
+        ['Countries DB', m.dict?.countries ?? '—', ''],
+      ];
+      $('cityMetricCards').innerHTML = cards.map(([k, v, cls]) =>
+        `<div class="card ${cls}"><div class="k">${k}</div><div class="v">${v}</div></div>`
+      ).join('');
+      $('citySourceChips').innerHTML = (m.bySource || []).length
+        ? m.bySource.map((s) =>
+          `<span class="chip-stat">${escapeHtml(s.source)}: ${s.pending} pending · hits ${s.hits}</span>`
+        ).join('')
+        : '<span class="chip-stat">нет pending по источникам</span>';
+    }
+
+    function renderCitySuggestions(items) {
+      state.cityItems = items || [];
+      if (!items.length) {
+        $('citySuggestionsTable').innerHTML = '<div class="empty">Нет кандидатов</div>';
+        return;
+      }
+      const canApprove = $('cityStatus').value === 'pending';
+      $('citySuggestionsTable').innerHTML = `
+        <table>
+          <thead>
+            <tr>
+              <th style="width:32%">Кандидат</th>
+              <th>Ввод и сохранение (name · country · lat · lon)</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${items.map((item) => {
+              const hint = item.possible_duplicate_name
+                ? `<div class="hint-warn">похоже на: ${escapeHtml(item.possible_duplicate_name)}</div>`
+                : '';
+              const rejected = item.status === 'rejected'
+                ? `<div class="muted">reject: ${escapeHtml(item.reject_reason || '—')}</div>`
+                : '';
+              return `<tr data-city-id="${escapeHtml(item._id)}">
+                <td>
+                  <div><strong>${escapeHtml(item.raw_name)}</strong></div>
+                  <div class="muted">${escapeHtml(item.source)} · hits ${item.hit_count || 1}</div>
+                  ${item.slug ? `<div class="mono">/${escapeHtml(item.slug)}/</div>` : ''}
+                  ${item.source_url ? `<div class="mono"><a href="${escapeHtml(item.source_url)}" target="_blank" rel="noopener" style="color:var(--accent)">source</a></div>` : ''}
+                  ${hint}${rejected}
+                </td>
+                <td>
+                  <div class="city-form">
+                    <input class="f-name" value="${escapeHtml(item.raw_name)}" placeholder="name" ${canApprove ? '' : 'disabled'} />
+                    <select class="f-country" ${canApprove ? '' : 'disabled'}>
+                      <option value="">страна…</option>
+                      ${countryOptionsHtml()}
+                    </select>
+                    <input class="f-lat" placeholder="lat" ${canApprove ? '' : 'disabled'} />
+                    <input class="f-lon" placeholder="lon" ${canApprove ? '' : 'disabled'} />
+                    <button type="button" class="ok btn-city-approve" ${canApprove ? '' : 'disabled'}>Approve</button>
+                    <button type="button" class="danger btn-city-reject" ${canApprove ? '' : 'disabled'}>Reject</button>
+                  </div>
+                </td>
+              </tr>`;
+            }).join('')}
+          </tbody>
+        </table>`;
+    }
+
+    async function loadCountries() {
+      const data = await api('/parsing/countries');
+      state.countries = data.countries || [];
+    }
+
+    async function loadCityMetrics() {
+      const data = await api('/parsing/cities/suggestions/metrics');
+      renderCityMetrics(data.metrics || {});
+    }
+
+    async function loadCitySuggestions() {
+      const qs = new URLSearchParams({
+        page: String(state.cityPage),
+        per_page: String(state.cityPerPage),
+        status: $('cityStatus').value || 'pending',
+      });
+      const src = $('cityListSource').value;
+      if (src) qs.set('source', src);
+      const q = $('cityQ').value.trim();
+      if (q) qs.set('q', q);
+      const data = await api(`/parsing/cities/suggestions?${qs}`);
+      state.cityTotal = data.total || 0;
+      $('cityListMeta').textContent = `всего: ${state.cityTotal} · page ${data.page} · per_page ${data.per_page}`;
+      $('cityPageLabel').textContent = String(data.page || state.cityPage);
+      renderCitySuggestions(data.items || []);
+    }
+
+    async function loadCitiesTab() {
+      showError('');
+      saveCreds();
+      await loadCountries();
+      await loadCityMetrics();
+      await loadCitySuggestions();
+    }
+
+    async function runCityDiscover() {
+      const source = $('cityDiscoverSource').value;
+      $('cityDiscoverBtn').disabled = true;
+      try {
+        const data = await api('/parsing/cities/discover', {
+          method: 'POST',
+          body: JSON.stringify({ source }),
+        });
+        const u = data.upsert || {};
+        toast(
+          `${source}: +${u.created || 0} new · ${u.updated || 0} updated · `
+          + `${u.alreadyInDb || 0} already in DB · garbage ${u.garbageSkipped || 0}`
+          + (data.message ? `\n${data.message}` : ''),
+          data.status !== 'unsupported',
+        );
+        state.cityPage = 1;
+        $('cityListSource').value = source;
+        await loadCityMetrics();
+        await loadCitySuggestions();
+      } finally {
+        $('cityDiscoverBtn').disabled = false;
+      }
+    }
+
+    async function approveCityRow(tr) {
+      const id = tr.dataset.cityId;
+      const name = tr.querySelector('.f-name').value.trim();
+      const country_id = tr.querySelector('.f-country').value;
+      const lat = tr.querySelector('.f-lat').value.trim();
+      const lon = tr.querySelector('.f-lon').value.trim();
+      if (!name || !country_id || !lat || !lon) {
+        throw new Error('Заполни name, страну, lat и lon');
+      }
+      const data = await api(`/parsing/cities/suggestions/${encodeURIComponent(id)}/approve`, {
+        method: 'POST',
+        body: JSON.stringify({ name, country_id, lat, lon }),
+      });
+      toast(`Сохранено main+second: ${data.city?.name} (${data.city?._id})`);
+      await loadCityMetrics();
+      await loadCitySuggestions();
+    }
+
+    async function rejectCityRow(tr) {
+      const id = tr.dataset.cityId;
+      await api(`/parsing/cities/suggestions/${encodeURIComponent(id)}/reject`, {
+        method: 'POST',
+        body: JSON.stringify({ reason: 'manual' }),
+      });
+      toast('Rejected');
+      await loadCityMetrics();
+      await loadCitySuggestions();
+    }
+
+    function renderCatCandMetrics(m) {
+      $('catCandMetricCards').innerHTML = `
+        <div class="card"><div class="k">Pending</div><div class="v">${m.pending || 0}</div></div>
+        <div class="card"><div class="k">Rejected</div><div class="v">${m.rejected || 0}</div></div>
+        <div class="card"><div class="k">Top hits</div><div class="v" style="font-size:0.95rem;line-height:1.35">${
+          (m.top || []).slice(0, 3).map((t) => `${escapeHtml(t.raw_name)} (${t.hit_count})`).join('<br/>') || '—'
+        }</div></div>
+      `;
+    }
+
+    function renderCatCandTable(items) {
+      const canApprove = ($('catCandStatus').value || 'pending') === 'pending';
+      $('catCandTable').innerHTML = `
+        <table>
+          <thead>
+            <tr>
+              <th>Кандидат</th>
+              <th>Keywords</th>
+              <th>Hits</th>
+              <th>Tokens (≈)</th>
+              <th>Примеры / sources</th>
+              <th>Действия</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${(items || []).map((item) => {
+              const examples = (item.example_events || []).slice(0, 3)
+                .map((e) => `<div class="muted">${escapeHtml(e)}</div>`).join('');
+              const sources = (item.sources || []).join(', ') || '—';
+              const kw = (item.keywords || [])
+                .slice(0, 10)
+                .map((k) => `${escapeHtml(k.word)}:${k.value}`)
+                .join(', ') || '—';
+              const rejected = item.status === 'rejected'
+                ? `<div class="muted">reject: ${escapeHtml(item.reject_reason || '—')}</div>`
+                : '';
+              return `<tr data-catcand-id="${escapeHtml(item._id)}">
+                <td>
+                  <input class="f-cat-name" value="${escapeHtml(item.raw_name)}" ${canApprove ? '' : 'disabled'} style="width:100%" />
+                  ${rejected}
+                </td>
+                <td class="mono" style="font-size:0.75rem;max-width:220px;word-break:break-word">${kw}</td>
+                <td class="mono">${item.hit_count || 1}</td>
+                <td class="mono">${Math.round(item.tokens_total || 0)}</td>
+                <td>
+                  <div class="muted mono">${escapeHtml(sources)}</div>
+                  ${examples}
+                </td>
+                <td>
+                  <button type="button" class="ok btn-catcand-approve" ${canApprove ? '' : 'disabled'}>Approve</button>
+                  <button type="button" class="danger btn-catcand-reject" ${canApprove ? '' : 'disabled'}>Reject</button>
+                </td>
+              </tr>`;
+            }).join('') || '<tr><td colspan="6" class="muted">Нет кандидатов</td></tr>'}
+          </tbody>
+        </table>`;
+    }
+
+    async function loadCatCandMetrics() {
+      const data = await api('/parsing/categories/suggestions/metrics');
+      renderCatCandMetrics(data.metrics || {});
+    }
+
+    async function loadCatCandSuggestions() {
+      const qs = new URLSearchParams({
+        page: String(state.catCandPage),
+        per_page: String(state.catCandPerPage),
+        status: $('catCandStatus').value || 'pending',
+      });
+      const q = $('catCandQ').value.trim();
+      if (q) qs.set('q', q);
+      const data = await api(`/parsing/categories/suggestions?${qs}`);
+      state.catCandTotal = data.total || 0;
+      $('catCandListMeta').textContent = `всего: ${state.catCandTotal} · page ${data.page} · per_page ${data.per_page}`;
+      $('catCandPageLabel').textContent = String(data.page || state.catCandPage);
+      renderCatCandTable(data.items || []);
+    }
+
+    async function exportCatCandsJson() {
+      saveCreds();
+      const status = $('catCandStatus').value || 'pending';
+      const q = $('catCandQ').value.trim();
+      const items = [];
+      let page = 1;
+      let totalPages = 1;
+      do {
+        const qs = new URLSearchParams({
+          page: String(page),
+          per_page: '200',
+          status,
+        });
+        if (q) qs.set('q', q);
+        // eslint-disable-next-line no-await-in-loop
+        const data = await api(`/parsing/categories/suggestions?${qs}`);
+        items.push(...(data.items || []));
+        totalPages = Math.max(1, data.totalPages || 1);
+        page += 1;
+      } while (page <= totalPages);
+
+      const payload = {
+        exported_at: new Date().toISOString(),
+        status,
+        q: q || null,
+        total: items.length,
+        items: items.map((it) => ({
+          _id: it._id,
+          raw_name: it.raw_name,
+          normalized_key: it.normalized_key,
+          status: it.status,
+          hit_count: it.hit_count,
+          tokens_total: it.tokens_total,
+          keywords: it.keywords || [],
+          example_events: it.example_events || [],
+          sources: it.sources || [],
+          first_seen_at: it.first_seen_at,
+          last_seen_at: it.last_seen_at,
+          reject_reason: it.reject_reason || '',
+        })),
+      };
+
+      const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-');
+      a.href = url;
+      a.download = `category-suggestions-${status}-${stamp}.json`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+      toast(`Экспорт: ${items.length} кандидатов`);
+    }
+
+    let catBackfillPollTimer = null;
+
+    function renderCatBackfillJob(job) {
+      const j = job || {};
+      const running = Boolean(j.running);
+      const statusEl = $('catBackfillStatus');
+      const btn = $('catBackfillStartBtn');
+      const stopBtn = $('catBackfillStopBtn');
+      const logEl = $('catBackfillLog');
+      stopBtn.disabled = !running || Boolean(j.cancelRequested);
+      if (running) {
+        statusEl.textContent = j.cancelRequested ? 'stopping…' : 'running…';
+        statusEl.style.color = 'var(--warn)';
+        btn.disabled = true;
+      } else if (j.error) {
+        statusEl.textContent = `error: ${j.error}`;
+        statusEl.style.color = 'var(--danger)';
+        btn.disabled = false;
+      } else if (j.finishedAt) {
+        statusEl.textContent = j.result?.stopped ? 'stopped' : 'done';
+        statusEl.style.color = 'var(--accent2)';
+        btn.disabled = false;
+      } else {
+        statusEl.textContent = 'idle';
+        statusEl.style.color = 'var(--muted)';
+        btn.disabled = false;
+      }
+      const lines = (j.logs || []).map((row) => {
+        const ts = row.t ? new Date(row.t).toISOString().slice(11, 19) : '';
+        return `${ts}  ${row.msg}`;
+      });
+      logEl.textContent = lines.length ? lines.join('\n') : '— нет логов —';
+      if (running || (j.logs || []).length) {
+        logEl.scrollTop = logEl.scrollHeight;
+      }
+    }
+
+    function stopCatBackfillPoll() {
+      if (catBackfillPollTimer) {
+        clearInterval(catBackfillPollTimer);
+        catBackfillPollTimer = null;
+      }
+    }
+
+    async function pollCatBackfillOnce() {
+      const data = await api('/parsing/categories/suggestions/backfill');
+      renderCatBackfillJob(data.job);
+      if (!data.job?.running) {
+        stopCatBackfillPoll();
+        if (data.job?.finishedAt) {
+          await loadCatCandMetrics();
+          await loadCatCandSuggestions();
+        }
+      }
+    }
+
+    function startCatBackfillPoll() {
+      stopCatBackfillPoll();
+      catBackfillPollTimer = setInterval(() => {
+        pollCatBackfillOnce().catch((e) => {
+          stopCatBackfillPoll();
+          toast(e.message || String(e), false);
+          $('catBackfillStartBtn').disabled = false;
+        });
+      }, 1000);
+    }
+
+    async function startCatBackfill() {
+      showError('');
+      saveCreds();
+      const limitRaw = $('catBackfillLimit').value.trim();
+      const body = {
+        applyCategory: Boolean($('catBackfillApply').checked),
+      };
+      if (limitRaw) body.limit = Number(limitRaw);
+      $('catBackfillStartBtn').disabled = true;
+      $('catBackfillLog').textContent = 'starting…';
+      const data = await api('/parsing/categories/suggestions/backfill', {
+        method: 'POST',
+        body: JSON.stringify(body),
+      });
+      renderCatBackfillJob(data.job);
+      startCatBackfillPoll();
+      toast('AI backfill запущен');
+    }
+
+    let catConsolidatePollTimer = null;
+
+    function renderCatConsolidateJob(job) {
+      const j = job || {};
+      const running = Boolean(j.running);
+      const statusEl = $('catConsolidateStatus');
+      const btn = $('catConsolidateStartBtn');
+      const stopBtn = $('catConsolidateStopBtn');
+      const logEl = $('catConsolidateLog');
+      stopBtn.disabled = !running || Boolean(j.cancelRequested);
+      if (running) {
+        statusEl.textContent = j.cancelRequested ? 'stopping…' : 'running…';
+        statusEl.style.color = 'var(--warn)';
+        btn.disabled = true;
+      } else if (j.error) {
+        statusEl.textContent = `error: ${j.error}`;
+        statusEl.style.color = 'var(--danger)';
+        btn.disabled = false;
+      } else if (j.finishedAt) {
+        statusEl.textContent = j.result?.stopped ? 'stopped' : 'done';
+        statusEl.style.color = 'var(--accent2)';
+        btn.disabled = false;
+      } else {
+        statusEl.textContent = 'idle';
+        statusEl.style.color = 'var(--muted)';
+        btn.disabled = false;
+      }
+      const lines = (j.logs || []).map((row) => {
+        const ts = row.t ? new Date(row.t).toISOString().slice(11, 19) : '';
+        return `${ts}  ${row.msg}`;
+      });
+      logEl.textContent = lines.length ? lines.join('\n') : '— нет логов —';
+      if (running || (j.logs || []).length) {
+        logEl.scrollTop = logEl.scrollHeight;
+      }
+    }
+
+    function stopCatConsolidatePoll() {
+      if (catConsolidatePollTimer) {
+        clearInterval(catConsolidatePollTimer);
+        catConsolidatePollTimer = null;
+      }
+    }
+
+    async function pollCatConsolidateOnce() {
+      const data = await api('/parsing/categories/suggestions/consolidate');
+      renderCatConsolidateJob(data.job);
+      if (!data.job?.running) {
+        stopCatConsolidatePoll();
+        if (data.job?.finishedAt) {
+          await loadCatCandMetrics();
+          await loadCatCandSuggestions();
+        }
+      }
+    }
+
+    function startCatConsolidatePoll() {
+      stopCatConsolidatePoll();
+      catConsolidatePollTimer = setInterval(() => {
+        pollCatConsolidateOnce().catch((e) => {
+          stopCatConsolidatePoll();
+          toast(e.message || String(e), false);
+          $('catConsolidateStartBtn').disabled = false;
+        });
+      }, 1000);
+    }
+
+    async function startCatConsolidate() {
+      showError('');
+      saveCreds();
+      const maxRaw = $('catConsolidateMax').value.trim();
+      const body = {
+        maxCategories: maxRaw ? Number(maxRaw) : 20,
+      };
+      $('catConsolidateStartBtn').disabled = true;
+      $('catConsolidateLog').textContent = 'starting…';
+      const data = await api('/parsing/categories/suggestions/consolidate', {
+        method: 'POST',
+        body: JSON.stringify(body),
+      });
+      renderCatConsolidateJob(data.job);
+      startCatConsolidatePoll();
+      toast('Discovery запущен');
+    }
+
+    async function loadCatCandsTab() {
+      showError('');
+      saveCreds();
+      await loadCatCandMetrics();
+      await loadCatCandSuggestions();
+      try {
+        const data = await api('/parsing/categories/suggestions/backfill');
+        renderCatBackfillJob(data.job);
+        if (data.job?.running) startCatBackfillPoll();
+      } catch (_) { /* ignore */ }
+      try {
+        const data = await api('/parsing/categories/suggestions/consolidate');
+        renderCatConsolidateJob(data.job);
+        if (data.job?.running) startCatConsolidatePoll();
+      } catch (_) { /* ignore */ }
+    }
+
+    async function approveCatCandRow(tr) {
+      const id = tr.dataset.catcandId;
+      const name = tr.querySelector('.f-cat-name').value.trim();
+      if (!name) throw new Error('name is required');
+      const data = await api(`/parsing/categories/suggestions/${encodeURIComponent(id)}/approve`, {
+        method: 'POST',
+        body: JSON.stringify({ name }),
+      });
+      const kw = (data.category?.keywords || []).length;
+      toast(`Категория main+second: ${data.category?.name} (${data.category?._id}), keywords=${kw}`);
+      await loadCatCandsTab();
+    }
+
+    async function rejectCatCandRow(tr) {
+      const id = tr.dataset.catcandId;
+      await api(`/parsing/categories/suggestions/${encodeURIComponent(id)}/reject`, {
+        method: 'POST',
+        body: JSON.stringify({ reason: 'manual' }),
+      });
+      toast('Rejected');
+      await loadCatCandsTab();
+    }
+
+    function switchTab(tab) {
+      document.querySelectorAll('[data-tab]').forEach((b) => b.classList.toggle('active', b.dataset.tab === tab));
+      TABS.forEach((t) => {
+        const el = $(`tab-${t}`);
+        if (el) el.classList.toggle('hidden', t !== tab);
+      });
+      if (tab === 'cities') {
+        loadCitiesTab().catch((e) => {
+          showError(e.message || String(e));
+          toast(e.message || String(e), false);
+        });
+      }
+      if (tab === 'catcands') {
+        loadCatCandsTab().catch((e) => {
+          showError(e.message || String(e));
+          toast(e.message || String(e), false);
+        });
+      }
+      if (tab === 'backfill' && !state.backfillStats) {
+        loadStats().catch((e) => showError(e.message || String(e)));
+      }
+      if (tab === 'runs') {
+        loadCronStatus().catch(() => {});
+        loadRuns().catch((e) => showError(e.message || String(e)));
+      }
+    }
+
+    document.querySelectorAll('[data-preset]').forEach((btn) => {
+      btn.addEventListener('click', () => applyPreset(btn.dataset.preset));
+    });
+    document.querySelectorAll('[data-tab]').forEach((btn) => {
+      btn.addEventListener('click', () => switchTab(btn.dataset.tab));
+    });
+    $('selectAll').onclick = () => document.querySelectorAll('#sources input').forEach((el) => { el.checked = true; });
+    $('selectNone').onclick = () => document.querySelectorAll('#sources input').forEach((el) => { el.checked = false; });
+    $('loadBtn').onclick = () => loadStats().catch((e) => showError(e.message || String(e)));
+    $('reloadRuns').onclick = () => loadRuns().catch((e) => showError(e.message || String(e)));
+    $('parseStopActiveBtn').onclick = async () => {
+      let runId = state.activeParseRunId;
+      if (!runId) {
+        try {
+          await loadRuns();
+        } catch (_) { /* ignore */ }
+        runId = state.activeParseRunId;
+      }
+      if (!runId) {
+        const active = (state.runs || []).find((r) => (
+          r && !['success', 'error', 'cancelled'].includes(r.status)
+        ));
+        runId = active?._id ? String(active._id) : null;
+      }
+      if (!runId) {
+        toast('Нет активного run', false);
+        return;
+      }
+      api(`/parsing/runs/${encodeURIComponent(runId)}/stop`, {
+        method: 'POST',
+        body: '{}',
+      }).then(() => {
+        toast('Stop запрошен — дождётся следующей контрольной точки');
+        startParsePoll(runId);
+        refreshActiveParseLog().catch(() => {});
+      }).catch((e) => toast(e.message || String(e), false));
+    };
+    $('cronStopBtn').onclick = () => api('/parsing/cron/stop', { method: 'POST', body: '{}' })
+      .then((data) => { renderCronStatus(data.cron); toast('Все parser/dict cron OFF (cleanup как был)'); })
+      .catch((e) => toast(e.message || String(e), false));
+    $('cronStartBtn').onclick = () => api('/parsing/cron/start', { method: 'POST', body: '{}' })
+      .then((data) => { renderCronStatus(data.cron); toast('Все cron ON'); })
+      .catch((e) => toast(e.message || String(e), false));
+    $('cronJobsTable').onclick = (ev) => {
+      const runBtn = ev.target.closest('.btn-cron-run');
+      const onBtn = ev.target.closest('.btn-cron-on');
+      const offBtn = ev.target.closest('.btn-cron-off');
+      if (runBtn) {
+        runBtn.disabled = true;
+        runCronJobUi(runBtn.dataset.id)
+          .catch((e) => toast(e.message || String(e), false))
+          .finally(() => { runBtn.disabled = false; });
+        return;
+      }
+      if (onBtn) {
+        api(`/parsing/cron/${encodeURIComponent(onBtn.dataset.id)}/enable`, { method: 'POST', body: '{}' })
+          .then((data) => { renderCronStatus(data.cron); toast(`${onBtn.dataset.id}: ON`); })
+          .catch((e) => toast(e.message || String(e), false));
+        return;
+      }
+      if (offBtn) {
+        api(`/parsing/cron/${encodeURIComponent(offBtn.dataset.id)}/disable`, { method: 'POST', body: '{}' })
+          .then((data) => { renderCronStatus(data.cron); toast(`${offBtn.dataset.id}: OFF`); })
+          .catch((e) => toast(e.message || String(e), false));
+      }
+    };
+    $('bfCardsShowAll').onclick = () => {
+      state.bfSelectedRunId = null;
+      if (state.backfillStats) renderBackfill(state.backfillStats);
+    };
+
+    $('cityDiscoverBtn').onclick = () => runCityDiscover().catch((e) => toast(e.message || String(e), false));
+    $('cityReloadBtn').onclick = () => loadCitiesTab().catch((e) => toast(e.message || String(e), false));
+    $('cityPrev').onclick = () => {
+      if (state.cityPage <= 1) return;
+      state.cityPage -= 1;
+      loadCitySuggestions().catch((e) => toast(e.message || String(e), false));
+    };
+    $('cityNext').onclick = () => {
+      const maxPage = Math.max(1, Math.ceil(state.cityTotal / state.cityPerPage));
+      if (state.cityPage >= maxPage) return;
+      state.cityPage += 1;
+      loadCitySuggestions().catch((e) => toast(e.message || String(e), false));
+    };
+    $('cityStatus').onchange = () => { state.cityPage = 1; loadCitySuggestions().catch((e) => toast(e.message || String(e), false)); };
+    $('cityListSource').onchange = () => { state.cityPage = 1; loadCitySuggestions().catch((e) => toast(e.message || String(e), false)); };
+    let cityQTimer;
+    $('cityQ').oninput = () => {
+      clearTimeout(cityQTimer);
+      cityQTimer = setTimeout(() => {
+        state.cityPage = 1;
+        loadCitySuggestions().catch((e) => toast(e.message || String(e), false));
+      }, 300);
+    };
+    $('citySuggestionsTable').onclick = (ev) => {
+      const tr = ev.target.closest('tr[data-city-id]');
+      if (!tr) return;
+      if (ev.target.classList.contains('btn-city-approve')) {
+        ev.target.disabled = true;
+        approveCityRow(tr)
+          .catch((e) => { toast(e.message || String(e), false); ev.target.disabled = false; });
+      }
+      if (ev.target.classList.contains('btn-city-reject')) {
+        ev.target.disabled = true;
+        rejectCityRow(tr)
+          .catch((e) => { toast(e.message || String(e), false); ev.target.disabled = false; });
+      }
+    };
+
+    $('catCandReloadBtn').onclick = () => loadCatCandsTab().catch((e) => toast(e.message || String(e), false));
+    $('catCandExportBtn').onclick = () => exportCatCandsJson().catch((e) => toast(e.message || String(e), false));
+    $('catBackfillStartBtn').onclick = () => startCatBackfill().catch((e) => {
+      toast(e.message || String(e), false);
+      $('catBackfillStartBtn').disabled = false;
+    });
+    $('catBackfillStopBtn').onclick = () => api('/parsing/categories/suggestions/backfill/stop', {
+      method: 'POST',
+      body: '{}',
+    }).then((data) => {
+      renderCatBackfillJob(data.job);
+      toast('Stop запрошен — дождётся конца текущего chunk');
+    }).catch((e) => toast(e.message || String(e), false));
+    $('catConsolidateStartBtn').onclick = () => startCatConsolidate().catch((e) => {
+      toast(e.message || String(e), false);
+      $('catConsolidateStartBtn').disabled = false;
+    });
+    $('catConsolidateStopBtn').onclick = () => api('/parsing/categories/suggestions/consolidate/stop', {
+      method: 'POST',
+      body: '{}',
+    }).then((data) => {
+      renderCatConsolidateJob(data.job);
+      toast('Stop запрошен');
+    }).catch((e) => toast(e.message || String(e), false));
+    $('catCandPrev').onclick = () => {
+      if (state.catCandPage <= 1) return;
+      state.catCandPage -= 1;
+      loadCatCandSuggestions().catch((e) => toast(e.message || String(e), false));
+    };
+    $('catCandNext').onclick = () => {
+      const maxPage = Math.max(1, Math.ceil(state.catCandTotal / state.catCandPerPage));
+      if (state.catCandPage >= maxPage) return;
+      state.catCandPage += 1;
+      loadCatCandSuggestions().catch((e) => toast(e.message || String(e), false));
+    };
+    $('catCandStatus').onchange = () => {
+      state.catCandPage = 1;
+      loadCatCandSuggestions().catch((e) => toast(e.message || String(e), false));
+    };
+    let catCandQTimer;
+    $('catCandQ').oninput = () => {
+      clearTimeout(catCandQTimer);
+      catCandQTimer = setTimeout(() => {
+        state.catCandPage = 1;
+        loadCatCandSuggestions().catch((e) => toast(e.message || String(e), false));
+      }, 300);
+    };
+    $('catCandTable').onclick = (ev) => {
+      const tr = ev.target.closest('tr[data-catcand-id]');
+      if (!tr) return;
+      if (ev.target.classList.contains('btn-catcand-approve')) {
+        ev.target.disabled = true;
+        approveCatCandRow(tr)
+          .catch((e) => { toast(e.message || String(e), false); ev.target.disabled = false; });
+      }
+      if (ev.target.classList.contains('btn-catcand-reject')) {
+        ev.target.disabled = true;
+        rejectCatCandRow(tr)
+          .catch((e) => { toast(e.message || String(e), false); ev.target.disabled = false; });
+      }
+    };
+
+    renderSourceChips();
+    loadCreds();
+    applyPreset('last7');
+    if (location.hash === '#cities') {
+      switchTab('cities');
+    } else if (location.hash === '#catcands' || location.hash === '#categories') {
+      switchTab('catcands');
+    } else {
+      loadStats().catch((e) => showError(e.message || String(e)));
+    }
+  </script>
+</body>
+</html>

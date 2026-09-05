@@ -9,10 +9,12 @@ import { exec } from 'child_process';
 import { promisify } from 'util';
 import { URL } from 'url';
 import CitiesSchema from '../schemas/CitiesSchema';
-import OperationsSchema from '../schemas/OperationsSchema';
-import ParsedEventsSchema from '../schemas/ParsedEventsSchema';
 import { EVENT_SOURCE } from '../helpers/constants';
 import { createLoggerWithSource } from '../helpers/logger';
+import saveProcessedEvents from '../helpers/saveProcessedEvents';
+import logParseRun from '../helpers/logParseRun';
+import createCitySuggestionCollector from '../helpers/createCitySuggestionCollector';
+import findCityInDb from '../helpers/cityMatching';
 
 const logger = createLoggerWithSource('PARSE_EVENTIM');
 
@@ -22,32 +24,6 @@ moment.locale('ru');
 
 const citiesCache = {
   list: null,
-};
-
-const normalize = (str = '') => str
-  .toString()
-  .toLowerCase()
-  .normalize('NFD')
-  .replace(/[\u0300-\u036f]/g, '')
-  .replace(/\s+/g, ' ')
-  .trim();
-
-const cityTokens = (name = '') => name.split('|').map((s) => normalize(s)).filter(Boolean);
-
-/** Проверяет, что token встречается в text целиком (token может быть из нескольких слов, напр. "new york"). Границы — явные разделители, не \\b, чтобы кириллица не матчилась по подстроке (Бар в Барселона). */
-const containsWholeWord = (text, token) => {
-  if (!text || !token) return false;
-  const escaped = token.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  return new RegExp(`(^|[\\s,.\\-•;])${escaped}([\\s,.\\-•;]|$)`, 'i').test(text);
-};
-
-const findCity = (cities, targetName = '') => {
-  const target = normalize(targetName);
-  if (!target) return null;
-  return cities.find((c) => {
-    const tokens = cityTokens(c.name);
-    return tokens.some((tok) => containsWholeWord(target, tok));
-  }) || null;
 };
 
 const parseCoordinatesField = (coord) => {
@@ -277,26 +253,16 @@ const extractGz = async (gzPath, extractPath) => {
   });
 };
 
-const logProgress = async (operationId, message) => {
-  if (operationId) {
-    try {
-      const operation = await OperationsSchema.findById(operationId);
-      if (operation) {
-        const timestamp = new Date().toISOString();
-        const newLog = `[${timestamp}] ${message}`;
-        operation.infoText = operation.infoText ? `${operation.infoText}\n${newLog}` : newLog;
-        await operation.save();
-      }
-    } catch (e) {
-      logger.error(`Error logging progress: ${e.message || e}`);
-    }
-  }
+const logProgress = async (runId, message) => {
+  await logParseRun(runId, `[${new Date().toISOString()}] ${message}`);
 };
 
-async function parseEventim({ meta, operationId }) {
+async function parseEventim({ meta = {}, runId }) {
+  const parseRunId = runId;
   const events = [];
   const errorTexts = [];
   const infoTexts = [];
+  const citySuggestions = createCitySuggestionCollector(EVENT_SOURCE.eventim);
 
   try {
     const {
@@ -306,7 +272,7 @@ async function parseEventim({ meta, operationId }) {
     
     const cities = await loadCities();
 
-    await logProgress(operationId, 'Starting Eventim parsing...');
+    await logProgress(parseRunId, 'Starting Eventim parsing...');
 
     let raw;
     let extractedPath = null;
@@ -314,9 +280,9 @@ async function parseEventim({ meta, operationId }) {
     const tmpDir = path.join(process.cwd(), 'tmp');
     if (!fs.existsSync(tmpDir)) {
       fs.mkdirSync(tmpDir, { recursive: true });
-      await logProgress(operationId, `Created tmp directory: ${tmpDir}`);
+      await logProgress(parseRunId, `Created tmp directory: ${tmpDir}`);
     }
-    await logProgress(operationId, `Using tmp directory: ${tmpDir}`);
+    await logProgress(parseRunId, `Using tmp directory: ${tmpDir}`);
     const rawPath = path.join(tmpDir, 'eventim.json');
     const extractPath = tmpDir;
     const eventimUrlDefault = process.env.EVENTIM_URL;
@@ -325,25 +291,25 @@ async function parseEventim({ meta, operationId }) {
     const urlToUse = eventimUrl || eventimUrlDefault;
 
     try {
-      await logProgress(operationId, `Downloading Eventim file from ${urlToUse}...`);
+      await logProgress(parseRunId, `Downloading Eventim file from ${urlToUse}...`);
       const urlObj = new URL(urlToUse);
       const urlFileName = path.basename(urlObj.pathname) || 'eventim.json.gz';
       const gzPath = path.join(tmpDir, urlFileName);
-      await logProgress(operationId, `Will save archive to: ${gzPath}`);
+      await logProgress(parseRunId, `Will save archive to: ${gzPath}`);
       
       await downloadFile(urlToUse, gzPath, eventimPassword, eventimUsername);
-      await logProgress(operationId, `Archive downloaded to: ${gzPath}`);
+      await logProgress(parseRunId, `Archive downloaded to: ${gzPath}`);
       
-      await logProgress(operationId, 'Extracting archive...');
+      await logProgress(parseRunId, 'Extracting archive...');
       extractedPath = await extractGz(gzPath, extractPath);
-      await logProgress(operationId, `Archive extracted to: ${extractedPath}`);
+      await logProgress(parseRunId, `Archive extracted to: ${extractedPath}`);
       
       if (fs.existsSync(gzPath)) {
         fs.unlinkSync(gzPath);
       }
 
       const extractedFileName = path.basename(extractedPath);
-      await logProgress(operationId, `Reading extracted file: ${extractedFileName}`);
+      await logProgress(parseRunId, `Reading extracted file: ${extractedFileName}`);
 
       if (extractedFileName.endsWith('.nml')) {
         const nmlContent = fs.readFileSync(extractedPath, 'utf8');
@@ -358,32 +324,32 @@ async function parseEventim({ meta, operationId }) {
         }
       } else if (extractedFileName.endsWith('.json')) {
         raw = fs.readFileSync(extractedPath, 'utf8');
-        await logProgress(operationId, `File read successfully, size: ${raw.length} bytes`);
+        await logProgress(parseRunId, `File read successfully, size: ${raw.length} bytes`);
       } else if (fs.existsSync(rawPath)) {
         raw = fs.readFileSync(rawPath, 'utf8');
         const cacheMsg = 'Using cached eventim.json file';
         infoTexts.push(cacheMsg);
-        await logProgress(operationId, cacheMsg);
+        await logProgress(parseRunId, cacheMsg);
       } else {
         const errMsg = `No NML or JSON file found in extracted archive. Extracted file: ${extractedFileName}`;
         logger.error(errMsg);
         throw new Error(errMsg);
       }
-      await logProgress(operationId, 'File downloaded and extracted successfully');
+      await logProgress(parseRunId, 'File downloaded and extracted successfully');
     } catch (downloadErr) {
       const errMsg = downloadErr?.message || downloadErr?.toString() || 'Unknown download error';
       errorTexts.push(`Failed to download/extract Eventim file: ${errMsg}`);
       logger.error(`Eventim download/extract error: ${errMsg}`, downloadErr);
-      await logProgress(operationId, `ERROR during download/extract: ${errMsg}`);
+      await logProgress(parseRunId, `ERROR during download/extract: ${errMsg}`);
       
       if (fs.existsSync(rawPath)) {
         raw = fs.readFileSync(rawPath, 'utf8');
         const fallbackMsg = 'Using cached eventim.json file as fallback';
         infoTexts.push(fallbackMsg);
-        await logProgress(operationId, fallbackMsg);
+        await logProgress(parseRunId, fallbackMsg);
       } else {
         logger.error(`FATAL: No cached file available. Error: ${errMsg}`);
-        await logProgress(operationId, `FATAL: No cached file available. Error: ${errMsg}`);
+        await logProgress(parseRunId, `FATAL: No cached file available. Error: ${errMsg}`);
         throw downloadErr;
       }
     }
@@ -392,11 +358,11 @@ async function parseEventim({ meta, operationId }) {
       const errMsg = 'No data available to parse (raw is empty)';
       errorTexts.push(errMsg);
       logger.error(errMsg);
-      await logProgress(operationId, `FATAL ERROR: ${errMsg}`);
+      await logProgress(parseRunId, `FATAL ERROR: ${errMsg}`);
       throw new Error(errMsg);
     }
 
-    await logProgress(operationId, 'Parsing Eventim data...');
+    await logProgress(parseRunId, 'Parsing Eventim data...');
     let parsedData;
     try {
       parsedData = JSON.parse(raw);
@@ -404,12 +370,12 @@ async function parseEventim({ meta, operationId }) {
       const errMsg = `Failed to parse JSON: ${parseErr?.message || parseErr}`;
       errorTexts.push(errMsg);
       logger.error(errMsg, parseErr);
-      await logProgress(operationId, `FATAL ERROR: ${errMsg}`);
+      await logProgress(parseRunId, `FATAL ERROR: ${errMsg}`);
       throw new Error(errMsg);
     }
     
     const { eventserie = [] } = parsedData;
-    await logProgress(operationId, `Found ${eventserie.length} event series to process`);
+    await logProgress(parseRunId, `Found ${eventserie.length} event series to process`);
 
     for (const series of eventserie) {
       const photoUrl = series.esPictureBig || series.esPicture || series.esPictureSmall || null;
@@ -425,16 +391,16 @@ async function parseEventim({ meta, operationId }) {
         const address = addressParts.join(', ');
 
         const targetCity = event.eventCity || metaCityName || '';
-        const matchedCity = findCity(cities, targetCity);
+        const matchedCity = findCityInDb(cities, targetCity);
         const fallbackCoords = parseCoordinatesField(matchedCity?.coordinates);
         const resolvedCityId = cityId || matchedCity?._id || null;
         const resolvedCountryId = countryId || matchedCity?.country_id || null;
 
         if (!resolvedCityId || !resolvedCountryId) {
-          const skipMsg = `Skip event "${event.eventName || series.esName}" – city/country id missing; pass meta.cityId/meta.countryId or ensure city exists in DB. [DEBUG targetCity="${targetCity}" matched="${matchedCity?.name || 'null'}" matchedCityId="${matchedCity?._id || '-'}" matchedCountryId="${matchedCity?.country_id || '-'}" providedCityId="${cityId || '-'}" providedCountryId="${countryId || '-'}"]`;
+          if (targetCity) citySuggestions.note(targetCity);
+          const skipMsg = `Event "${event.eventName || series.esName}" – city/country missing (targetCity="${targetCity}"); saving without city.`;
           infoTexts.push(skipMsg);
-          await logProgress(operationId, `INFO: ${skipMsg}`);
-          continue;
+          await logProgress(parseRunId, `INFO: ${skipMsg}`);
         }
 
         const newEvent = {
@@ -442,9 +408,10 @@ async function parseEventim({ meta, operationId }) {
           description: series.esText || event.eventName || '',
           specialization: 'Event',
           admin_id: adminId,
-          country_id: resolvedCountryId,
-          city_id: resolvedCityId?.toString ? resolvedCityId.toString() : String(resolvedCityId),
-          operationId: operationId,
+          country_id: resolvedCountryId || null,
+          city_id: resolvedCityId
+            ? (resolvedCityId?.toString ? resolvedCityId.toString() : String(resolvedCityId))
+            : null,
           contacts: { website: event.eventLink || series.esLink || '' },
           photos: photoUrl ? [{ full_url: photoUrl }] : [],
           holding_date: holdingDate,
@@ -452,6 +419,7 @@ async function parseEventim({ meta, operationId }) {
           date_end: dateStart,
           source: EVENT_SOURCE.eventim,
           address,
+          _mergeDates: dateStart ? [dateStart] : [],
         };
 
         if (typeof event.venueLatitude === 'number' && typeof event.venueLongitude === 'number') {
@@ -477,60 +445,50 @@ async function parseEventim({ meta, operationId }) {
       } catch (unlinkErr) {
         const unlinkMsg = `Failed to delete extracted file: ${unlinkErr.message}`;
         infoTexts.push(unlinkMsg);
-        await logProgress(operationId, `WARNING: ${unlinkMsg}`);
+        await logProgress(parseRunId, `WARNING: ${unlinkMsg}`);
       }
     }
 
-    await logProgress(operationId, `Parsing completed. Total: ${events.length} events parsed`);
+    await logProgress(parseRunId, `Parsing completed. Total: ${events.length} events parsed`);
   } catch (e) {
+    if (e?.cancelled) throw e;
     const errMsg = e?.message || 'Unknown error while parsing Eventim';
     errorTexts.push(errMsg);
     logger.error(`FATAL ERROR: ${errMsg}`, e);
-    await logProgress(operationId, `FATAL ERROR: ${errMsg}`);
+    await logProgress(parseRunId, `FATAL ERROR: ${errMsg}`);
   }
 
-  const BATCH_SIZE = 10;
+  let citySuggestionStats = null;
   try {
-    for (let i = 0; i < events.length; i += BATCH_SIZE) {
-      const batch = events.slice(i, i + BATCH_SIZE);
-      const batchNumber = Math.floor(i / BATCH_SIZE) + 1;
-      
-      await ParsedEventsSchema.insertMany(
-        batch.map(event => ({
-          operation: operationId,
-          event_data: event,
-          batch_number: batchNumber,
-        }))
+    await logProgress(parseRunId, 'Flushing city suggestions...');
+    citySuggestionStats = await citySuggestions.flush();
+    if (citySuggestionStats.candidatesSeen > 0) {
+      infoTexts.push(
+        `CitySuggestions: +${citySuggestionStats.created} new, ${citySuggestionStats.updated} updated, `
+        + `${citySuggestionStats.alreadyInDb} already in DB`,
       );
-      
-      const operation = await OperationsSchema.findById(operationId);
-      await OperationsSchema.findByIdAndUpdate(operationId, {
-        infoText: `${operation?.infoText || ''}\nОбработано ${i + batch.length} из ${events.length} событий. Батч ${batchNumber} из ${Math.ceil(events.length / BATCH_SIZE)}`,
-      });
+      await logProgress(
+        parseRunId,
+        `CitySuggestions: +${citySuggestionStats.created} new, ${citySuggestionStats.updated} updated`,
+      );
     }
-    
-    const operation = await OperationsSchema.findById(operationId);
-    const finalInfoText = operation?.infoText || '';
-    const additionalInfo = infoTexts.length > 0 ? `\n${infoTexts.join('\n')}` : '';
-    
-    await OperationsSchema.findByIdAndUpdate(operationId, {
-      status: 'success',
-      finish_time: new Date(),
-      statistics: JSON.stringify({
-        total: events.length,
-        batches: Math.ceil(events.length / BATCH_SIZE),
-        errors: errorTexts.length,
-      }),
-      errorText: errorTexts.join('\n'),
-      infoText: finalInfoText + additionalInfo,
+  } catch (e) {
+    errorTexts.push(`CitySuggestions flush failed: ${e?.message || e}`);
+  }
+
+  try {
+    await logProgress(parseRunId, `Saving ${events.length} events to database...`);
+    await saveProcessedEvents({
+      runId: parseRunId,
+      events,
+      source: EVENT_SOURCE.eventim,
+      infoTexts,
+      errorTexts,
+      extraStatistics: { citySuggestions: citySuggestionStats },
     });
   } catch (error) {
+    if (error?.cancelled) throw error;
     logger.error(`Error saving events to database: ${error.message || error}`, error);
-    await OperationsSchema.findByIdAndUpdate(operationId, {
-      status: 'error',
-      errorText: error.message || 'Unknown error while saving events',
-      finish_time: new Date(),
-    });
   }
 }
 

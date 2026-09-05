@@ -1,7 +1,7 @@
 import mongoose from 'mongoose';
-import OperationsSchema from '../src/schemas/OperationsSchema';
+import ParseRunsSchema from '../src/schemas/ParseRunsSchema';
 import { OPERATION_STATUSES, OPERATION_TYPES } from '../src/helpers/constants';
-import startParsingOperation from '../src/helpers/startParsingOperation';
+import startParseRun from '../src/helpers/startParseRun';
 import { createLoggerWithSource } from '../src/helpers/logger';
 
 const logger = createLoggerWithSource('RUN_TICKETMASTER');
@@ -45,7 +45,7 @@ async function main() {
   const scope = meta.countryCode ? `country=${meta.countryCode}` : 'DB countries with Ticketmaster coverage';
   logger.info(`Starting Ticketmaster parsing (${scope})...`);
 
-  const operationId = await startParsingOperation(
+  const runId = await startParseRun(
     OPERATION_TYPES.parsingEventsFromTicketmaster,
     meta,
   );
@@ -58,15 +58,15 @@ async function main() {
     await sleep(pollIntervalMs);
 
     // eslint-disable-next-line no-await-in-loop
-    const operation = await OperationsSchema.findById(operationId).lean();
-    if (!operation) {
-      logger.error('Operation not found');
+    const run = await ParseRunsSchema.findById(runId).lean();
+    if (!run) {
+      logger.error('Parse run not found');
       break;
     }
 
-    if (operation.status === OPERATION_STATUSES.success) {
-      const stats = operation.statistics ? JSON.parse(operation.statistics) : {};
-      logger.info(`Done: ${operation.infoText || ''}`);
+    if (run.status === OPERATION_STATUSES.success) {
+      const stats = run.statistics ? JSON.parse(run.statistics) : {};
+      logger.info(`Done: ${run.infoText || ''}`);
       logger.info(`Statistics: ${JSON.stringify({
         total: stats.total,
         countryCodes: stats.countryCodes,
@@ -78,10 +78,10 @@ async function main() {
       break;
     }
 
-    if (operation.status === OPERATION_STATUSES.error) {
-      logger.error(`Parsing failed: ${operation.errorText || 'Unknown error'}`);
-      if (operation.statistics) {
-        logger.error(`Statistics: ${operation.statistics}`);
+    if (run.status === OPERATION_STATUSES.error) {
+      logger.error(`Parsing failed: ${run.errorText || 'Unknown error'}`);
+      if (run.statistics) {
+        logger.error(`Statistics: ${run.statistics}`);
       }
       break;
     }

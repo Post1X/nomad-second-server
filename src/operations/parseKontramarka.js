@@ -1,41 +1,19 @@
 import moment from 'moment';
 import puppeteer from 'puppeteer';
 import CitiesSchema from '../schemas/CitiesSchema';
-import OperationsSchema from '../schemas/OperationsSchema';
-import ParsedEventsSchema from '../schemas/ParsedEventsSchema';
+import ParseRunsSchema from '../schemas/ParseRunsSchema';
 import { EVENT_SOURCE } from '../helpers/constants';
 import { createLoggerWithSource } from '../helpers/logger';
+import saveProcessedEvents from '../helpers/saveProcessedEvents';
+import logParseRun from '../helpers/logParseRun';
+import createCitySuggestionCollector from '../helpers/createCitySuggestionCollector';
+import findCityInDb from '../helpers/cityMatching';
+import discoverKontramarkaCities from '../services/cityDiscovery/discoverKontramarka';
 
 const logger = createLoggerWithSource('PARSE_KONTRAMARKA');
 
 const citiesCache = {
   gr: null,
-};
-
-const normalize = (str = '') => str
-  .toString()
-  .toLowerCase()
-  .normalize('NFD')
-  .replace(/[\u0300-\u036f]/g, '')
-  .replace(/\s+/g, ' ')
-  .trim();
-
-const cityTokens = (name = '') => name.split('|').map((s) => normalize(s)).filter(Boolean);
-
-/** Проверяет, что token встречается в text целиком (token может быть из нескольких слов, напр. "new york"). Границы — явные разделители, не \\b, чтобы кириллица не матчилась по подстроке (Бар в Барселона). */
-const containsWholeWord = (text, token) => {
-  if (!text || !token) return false;
-  const escaped = token.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  return new RegExp(`(^|[\\s,.\\-•;])${escaped}([\\s,.\\-•;]|$)`, 'i').test(text);
-};
-
-const findCity = (cities, targetName = '') => {
-  const target = normalize(targetName);
-  if (!target) return null;
-  return cities.find((c) => {
-    const tokens = cityTokens(c.name);
-    return tokens.some((tok) => containsWholeWord(target, tok));
-  }) || null;
 };
 
 const parseCoordinatesField = (coord) => {
@@ -60,10 +38,66 @@ const parseCoordinatesField = (coord) => {
   return null;
 };
 
+/** Site slugs are Latin (muenchen, koeln) — never encode Cyrillic city names into the URL. */
 const buildCitySlug = (name = '') => {
   const parts = name.split('|').map((s) => s.trim()).filter(Boolean);
-  const prefer = parts[1] || parts[0] || name;
-  return encodeURIComponent(prefer.toLowerCase().replace(/\s+/g, '-'));
+  const latin = parts.find((p) => /[a-zA-ZäöüÄÖÜß]/.test(p));
+  const prefer = latin || parts[0] || name;
+  if (!/[a-zA-Z]/.test(prefer) && /[\u0400-\u04FF]/.test(prefer)) return null;
+  return prefer
+    .toLowerCase()
+    .replace(/ä/g, 'ae')
+    .replace(/ö/g, 'oe')
+    .replace(/ü/g, 'ue')
+    .replace(/ß/g, 'ss')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '');
+};
+
+/**
+ * Cities to scrape = homepage catalog (real slugs), matched to DB when possible.
+ * Inventing /city/{cyrillic}/ from DB names yields 404 and zero events.
+ */
+const resolveCitiesToScrape = async (citiesAll, meta = {}) => {
+  const { cityId, cityName, maxCities } = meta;
+  const { candidates, meta: discoverMeta } = await discoverKontramarkaCities();
+
+  const bySlug = new Map();
+  for (const cand of candidates) {
+    if (!cand?.slug || bySlug.has(cand.slug)) continue;
+    const dbCity = findCityInDb(citiesAll, cand.raw_name)
+      || findCityInDb(citiesAll, cand.slug.replace(/-/g, ' '));
+    bySlug.set(cand.slug, {
+      name: dbCity?.name || cand.raw_name,
+      slug: cand.slug,
+      kmLabel: cand.raw_name,
+      _id: dbCity?._id || null,
+      country_id: dbCity?.country_id || null,
+      coordinates: dbCity?.coordinates || null,
+    });
+  }
+
+  let targets = [...bySlug.values()];
+
+  if (cityId) {
+    const id = String(cityId);
+    targets = targets.filter((t) => t._id && String(t._id) === id);
+  } else if (cityName) {
+    const normalized = cityName.toLowerCase();
+    targets = targets.filter((t) => (
+      String(t.name || '').toLowerCase().includes(normalized)
+      || String(t.kmLabel || '').toLowerCase().includes(normalized)
+      || String(t.slug || '').toLowerCase().includes(normalized)
+    ));
+  }
+
+  if (typeof maxCities === 'number' && maxCities > 0) {
+    targets = targets.slice(0, maxCities);
+  }
+
+  return { targets, discoverMeta };
 };
 
 /** Форматирует последовательность чисел дат: 3+ подряд — через тире */
@@ -140,43 +174,6 @@ const formatHoldingDate = (dateArray) => {
   return result;
 };
 
-/** Объединяет дубликаты по (name, address, city_id): один объект на ключ, даты и цены мержатся. */
-const mergeDuplicateEvents = (events) => {
-  if (!events || events.length === 0) return [];
-  const key = (e) => `${String(e.name).trim()}\n${String(e.address).trim()}\n${(e.city_id || '').toString()}`;
-  const byKey = new Map();
-  for (const e of events) {
-    const k = key(e);
-    if (!byKey.has(k)) byKey.set(k, { events: [], dates: [], prices: [] });
-    const g = byKey.get(k);
-    g.events.push(e);
-    const dates = e._mergeDates || (e.date_start ? [e.date_start] : []);
-    g.dates.push(...dates);
-    if (e.min_price != null) g.prices.push(e.min_price);
-    if (e.max_price != null) g.prices.push(e.max_price);
-  }
-  const result = [];
-  for (const g of byKey.values()) {
-    const first = g.events[0];
-    const toTime = (d) => (d && d.getTime ? d.getTime() : (d ? new Date(d).getTime() : null));
-    const validDates = g.dates.map((d) => (d instanceof Date ? d : new Date(d))).filter((d) => !Number.isNaN(d.getTime()));
-    const dateStart = validDates.length ? new Date(Math.min(...validDates.map(toTime))) : null;
-    const dateEnd = validDates.length ? new Date(Math.max(...validDates.map(toTime))) : null;
-    const holdingDateStr = formatHoldingDate(validDates);
-    const ev = {
-      ...first,
-      date_start: dateStart,
-      date_end: dateEnd,
-      holding_date: holdingDateStr,
-      min_price: g.prices.length ? Math.min(...g.prices) : first.min_price,
-      max_price: g.prices.length ? Math.max(...g.prices) : first.max_price,
-    };
-    delete ev._mergeDates;
-    result.push(ev);
-  }
-  return result;
-};
-
 const poolAll = async (items, limit, worker) => {
   const results = [];
   const queue = [...items];
@@ -197,71 +194,70 @@ const loadCities = async () => {
   return citiesCache.gr;
 };
 
-const logProgress = async (operationId, message) => {
-  if (operationId) {
-    try {
-      const operation = await OperationsSchema.findById(operationId);
-      if (operation) {
-        const timestamp = new Date().toISOString();
-        const newLog = `[${timestamp}] ${message}`;
-        operation.infoText = operation.infoText ? `${operation.infoText}\n${newLog}` : newLog;
-        await operation.save();
-      }
-    } catch (e) {
-      logger.error(`Error logging progress: ${e.message || e}`);
-    }
-  }
+const logProgress = async (runId, message) => {
+  await logParseRun(runId, `[${new Date().toISOString()}] ${message}`);
 };
 
 moment.locale('ru');
 
-async function parseKontramarka({ meta, operationId }) {
+async function parseKontramarka({ meta = {}, runId }) {
+  const parseRunId = runId;
   const events = [];
   const errorTexts = [];
   const infoTexts = [];
   let allEvents = [];
-  let mergedEvents = [];
+  const citySuggestions = createCitySuggestionCollector(EVENT_SOURCE.kontramarka);
 
   try {
     const {
       adminId, countryId, cityId, specialization = 'Event', maxCities, cityName,
     } = meta || {};
-    
+
     const citiesAll = await loadCities();
-    let cities = citiesAll;
-    if (cityName) {
-      const normalized = cityName.toLowerCase();
-      cities = citiesAll.filter((c) => c.name.toLowerCase().includes(normalized));
-    } else if (typeof maxCities === 'number' && maxCities > 0) {
-      cities = citiesAll.slice(0, maxCities);
-    }
+    const { targets: cities, discoverMeta } = await resolveCitiesToScrape(citiesAll, {
+      cityId, cityName, maxCities,
+    });
 
-    await logProgress(operationId, `Starting Kontramarka parsing. Cities to process: ${cities.length}`);
+    await logProgress(
+      parseRunId,
+      `Starting Kontramarka parsing. Catalog cities: ${discoverMeta?.linksFound ?? '?'}, `
+      + `to process: ${cities.length}`,
+    );
 
+    if (!cities.length) {
+      infoTexts.push('No Kontramarka city pages to process (empty catalog or filters).');
+      await logProgress(parseRunId, 'INFO: No cities to process after catalog resolve');
+    } else {
     let browser;
     try {
-      await logProgress(operationId, 'Launching browser...');
+      await logProgress(parseRunId, 'Launching browser...');
       browser = await puppeteer.launch({
         headless: 'new',
         args: ['--no-sandbox', '--disable-setuid-sandbox'],
       });
-      await logProgress(operationId, 'Browser launched successfully');
+      await logProgress(parseRunId, 'Browser launched successfully');
     } catch (launchError) {
       const errorMsg = `Failed to launch browser: ${launchError?.message || launchError}`;
       errorTexts.push(errorMsg);
-      await logProgress(operationId, `FATAL ERROR: ${errorMsg}`);
+      await logProgress(parseRunId, `FATAL ERROR: ${errorMsg}`);
       throw new Error(errorMsg);
     }
 
     const processCity = async (cityItem) => {
-      const slug = buildCitySlug(cityItem.name);
+      const slug = cityItem.slug || buildCitySlug(cityItem.name);
+      if (!slug) {
+        const skipMsg = `Skip city "${cityItem.name}" – no Latin Kontramarka slug`;
+        infoTexts.push(skipMsg);
+        await logProgress(parseRunId, `INFO: ${skipMsg}`);
+        return [];
+      }
       const url = `https://www.kontramarka.de/city/${slug}/`;
       const page = await browser.newPage();
       const cityEvents = [];
       let scraped = 0;
       let skippedMissingIds = 0;
       try {
-        await logProgress(operationId, `Processing city: ${cityItem.name} (${url})`);
+        await logProgress(parseRunId, `Processing city: ${cityItem.name} (${url})`);
         await page.goto(url, { waitUntil: 'networkidle2', timeout: 45000 });
         const cards = await page.$$eval('.events__item', (items) => items.map((el) => {
           const title = el.querySelector('.block-title__text')?.textContent?.trim() || '';
@@ -300,7 +296,7 @@ async function parseKontramarka({ meta, operationId }) {
               if (sold) return null;
               const startIso = row.querySelector('[itemprop="startDate"]')?.getAttribute('content') || '';
               const endIso = row.querySelector('[itemprop="endDate"]')?.getAttribute('content') || startIso;
-              const cityName = row.querySelector('.schedule-col-main .city')?.textContent?.trim() || '';
+              const slotCityName = row.querySelector('.schedule-col-main .city')?.textContent?.trim() || '';
               const place = row.querySelector('.schedule-col-main .place')?.textContent?.trim() || '';
               const address = row.querySelector('[itemprop="address"]')?.getAttribute('content')
                 || place
@@ -312,7 +308,7 @@ async function parseKontramarka({ meta, operationId }) {
               return {
                 startIso,
                 endIso,
-                cityName,
+                cityName: slotCityName,
                 place,
                 address,
                 price,
@@ -321,27 +317,33 @@ async function parseKontramarka({ meta, operationId }) {
               };
             }).filter(Boolean));
 
-            const groupKey = (name, address) => `${String(name).trim()}\n${String(address).trim()}`;
+            const groupKey = (name, city) => `${String(name).trim()}\n${String(city || '')}`;
             const groups = new Map();
 
             for (const slot of slots) {
-              const matchedCity = findCity(cities, slot.cityName || cityItem.name);
-              const fallbackCoords = parseCoordinatesField(matchedCity?.coordinates);
-              const resolvedCityId = cityId || matchedCity?._id || null;
-              const resolvedCountryId = countryId || matchedCity?.country_id || null;
+              const matchedCity = findCityInDb(citiesAll, slot.cityName || cityItem.kmLabel || cityItem.name)
+                || (cityItem._id ? cityItem : null);
+              const fallbackCoords = parseCoordinatesField(matchedCity?.coordinates || cityItem.coordinates);
+              const resolvedCityId = cityId || matchedCity?._id || cityItem._id || null;
+              const resolvedCountryId = countryId || matchedCity?.country_id || cityItem.country_id || null;
 
               if (!resolvedCityId || !resolvedCountryId) {
                 skippedMissingIds += 1;
-                const skipMsg = `Skip event "${card.title}" – city/country id is missing; provide meta.cityId/meta.countryId or add IDs to DB. [DEBUG targetCity="${slot.cityName || cityItem.name}" matched="${matchedCity?.name || 'null'}" matchedCityId="${matchedCity?._id || '-'}" matchedCountryId="${matchedCity?.country_id || '-'}" providedCityId="${cityId || '-'}" providedCountryId="${countryId || '-'}"]`;
+                const targetCityName = slot.cityName || cityItem.kmLabel || cityItem.name;
+                citySuggestions.note(targetCityName, {
+                  slug: slug || buildCitySlug(targetCityName),
+                  source_url: tourUrl || url,
+                });
+                const skipMsg = `Skip event "${card.title}" – city/country id is missing; provide meta.cityId/meta.countryId or add IDs to DB. [DEBUG targetCity="${targetCityName}" matched="${matchedCity?.name || 'null'}" matchedCityId="${matchedCity?._id || '-'}" matchedCountryId="${matchedCity?.country_id || '-'}" providedCityId="${cityId || '-'}" providedCountryId="${countryId || '-'}"]`;
                 infoTexts.push(skipMsg);
-                await logProgress(operationId, `INFO: ${skipMsg}`);
+                await logProgress(parseRunId, `INFO: ${skipMsg}`);
                 continue;
               }
 
               const dateStart = slot.startIso ? new Date(slot.startIso) : null;
               const dateEnd = slot.endIso ? new Date(slot.endIso) : dateStart;
               const address = [slot.place || card.venue, slot.address || cityItem.name.split('|')[0]].filter(Boolean).join(', ');
-              const key = groupKey(card.title, address);
+              const key = groupKey(card.title, resolvedCityId);
 
               if (!groups.has(key)) {
                 groups.set(key, {
@@ -374,7 +376,6 @@ async function parseKontramarka({ meta, operationId }) {
                 admin_id: adminId,
                 country_id: g.resolvedCountryId,
                 city_id: g.resolvedCityId,
-                operationId: operationId,
                 contacts: { website: g.tourUrl },
                 photos: g.photoUrl ? [{ full_url: g.photoUrl }] : [],
                 holding_date: holdingDateStr,
@@ -401,7 +402,7 @@ async function parseKontramarka({ meta, operationId }) {
           } catch (detailErr) {
             const errMsg = `Error opening tour ${tourUrl}: ${detailErr?.message || detailErr}`;
             infoTexts.push(errMsg);
-            await logProgress(operationId, `WARNING: ${errMsg}`);
+            await logProgress(parseRunId, `WARNING: ${errMsg}`);
           } finally {
             await detail.close();
           }
@@ -410,16 +411,17 @@ async function parseKontramarka({ meta, operationId }) {
         if (!cards.length) {
           const noEventsMsg = `No events found on page for city ${cityItem.name} (${url})`;
           infoTexts.push(noEventsMsg);
-          await logProgress(operationId, `INFO: ${noEventsMsg}`);
+          await logProgress(parseRunId, `INFO: ${noEventsMsg}`);
         } else {
           const cityStats = `City ${cityItem.name}: scraped ${scraped}, skippedMissingIds ${skippedMissingIds}, added ${cityEvents.length}`;
           infoTexts.push(cityStats);
-          await logProgress(operationId, cityStats);
+          await logProgress(parseRunId, cityStats);
         }
       } catch (e) {
+        if (e?.cancelled) throw e;
         const errMsg = `Error for city ${cityItem.name}: ${e?.message || e}`;
         infoTexts.push(errMsg);
-        await logProgress(operationId, `WARNING: ${errMsg}`);
+        await logProgress(parseRunId, `WARNING: ${errMsg}`);
       } finally {
         await page.close();
       }
@@ -429,57 +431,44 @@ async function parseKontramarka({ meta, operationId }) {
     allEvents = await poolAll(cities, 3, processCity);
 
     await browser.close();
-    await logProgress(operationId, 'Browser closed');
-
-    mergedEvents = mergeDuplicateEvents(allEvents || []);
-    await logProgress(operationId, `Parsing completed. Total: ${mergedEvents.length} events (after merging duplicates)`);
+    await logProgress(parseRunId, 'Browser closed');
+    await logProgress(parseRunId, `Parsing completed. Total: ${(allEvents || []).length} events`);
+    }
   } catch (e) {
+    if (e?.cancelled) throw e;
     const errMsg = e?.message || 'Unknown error while parsing Kontramarka';
     errorTexts.push(errMsg);
-    await logProgress(operationId, `FATAL ERROR: ${errMsg}`);
+    await logProgress(parseRunId, `FATAL ERROR: ${errMsg}`);
   }
 
-  const BATCH_SIZE = 10;
-  const eventsToSave = mergedEvents.length ? mergedEvents : mergeDuplicateEvents(allEvents || []);
+  let citySuggestionStats = null;
   try {
-    for (let i = 0; i < eventsToSave.length; i += BATCH_SIZE) {
-      const batch = eventsToSave.slice(i, i + BATCH_SIZE);
-      const batchNumber = Math.floor(i / BATCH_SIZE) + 1;
-      
-      await ParsedEventsSchema.insertMany(
-        batch.map(event => ({
-          operation: operationId,
-          event_data: event,
-          batch_number: batchNumber,
-        }))
+    citySuggestionStats = await citySuggestions.flush();
+    if (citySuggestionStats.candidatesSeen > 0) {
+      infoTexts.push(
+        `CitySuggestions: +${citySuggestionStats.created} new, ${citySuggestionStats.updated} updated, `
+        + `${citySuggestionStats.alreadyInDb} already in DB`,
       );
-      
-      const operation = await OperationsSchema.findById(operationId);
-      await OperationsSchema.findByIdAndUpdate(operationId, {
-        infoText: `${operation?.infoText || ''}\nОбработано ${i + batch.length} из ${eventsToSave.length} событий. Батч ${batchNumber} из ${Math.ceil(eventsToSave.length / BATCH_SIZE)}`,
-      });
     }
-    
-    const operation = await OperationsSchema.findById(operationId);
-    const finalInfoText = operation?.infoText || '';
-    const additionalInfo = infoTexts.length > 0 ? `\n${infoTexts.join('\n')}` : '';
-    
-    await OperationsSchema.findByIdAndUpdate(operationId, {
-      status: 'success',
-      finish_time: new Date(),
-      statistics: JSON.stringify({
-        total: eventsToSave.length,
-        batches: Math.ceil(eventsToSave.length / BATCH_SIZE),
-        errors: errorTexts.length,
-      }),
-      errorText: errorTexts.join('\n'),
-      infoText: finalInfoText + additionalInfo,
+  } catch (e) {
+    errorTexts.push(`CitySuggestions flush failed: ${e?.message || e}`);
+  }
+
+  try {
+    await saveProcessedEvents({
+      runId: parseRunId,
+      events: allEvents || [],
+      source: EVENT_SOURCE.kontramarka,
+      infoTexts,
+      errorTexts,
+      extraStatistics: { citySuggestions: citySuggestionStats },
     });
   } catch (error) {
-    await OperationsSchema.findByIdAndUpdate(operationId, {
+    if (error?.cancelled) throw error;
+    await ParseRunsSchema.findByIdAndUpdate(parseRunId, {
       status: 'error',
       errorText: error.message || 'Unknown error while saving events',
-      finish_time: new Date(),
+      finishedAt: new Date(),
     });
   }
 }

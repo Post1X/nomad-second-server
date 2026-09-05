@@ -25,11 +25,6 @@ const Events = new mongoose.Schema({
     required: false,
     ref: 'Admins',
   },
-  operation: {
-    type: Schema.Types.ObjectId,
-    required: false,
-    ref: 'Operations',
-  },
   specialization: {
     type: String,
     required: false,
