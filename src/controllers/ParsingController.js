@@ -44,6 +44,17 @@ const resolveSource = (typeOrSource) => {
   return null;
 };
 
+/** Parse YYYY-MM-DD to UTC start/end of day. Returns null if invalid. */
+const parseDateOnlyBound = (value, endOfDay = false) => {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(value || '').trim());
+  if (!m) return null;
+  const y = Number(m[1]);
+  const mo = Number(m[2]) - 1;
+  const d = Number(m[3]);
+  if (endOfDay) return new Date(Date.UTC(y, mo, d, 23, 59, 59, 999));
+  return new Date(Date.UTC(y, mo, d, 0, 0, 0, 0));
+};
+
 class ParsingController {
   static create = async (req, res, next) => {
     try {
@@ -233,6 +244,7 @@ class ParsingController {
   /**
    * Browse all ParsedEvents for admin UI (not pull pipeline).
    * source optional; no onlyPending filter.
+   * Optional date_from / date_to (YYYY-MM-DD) filter by event_data.date_start.
    */
   static browseEvents = async (req, res, next) => {
     try {
@@ -242,6 +254,8 @@ class ParsingController {
         page: pageParam,
         per_page: perPageParam,
         q,
+        date_from: dateFromParam,
+        date_to: dateToParam,
       } = req.query;
 
       const page = Math.max(1, parseInt(String(pageParam || 1), 10) || 1);
@@ -264,6 +278,24 @@ class ParsingController {
         filter['event_data.name'] = { $regex: query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), $options: 'i' };
       }
 
+      const dateFrom = dateFromParam ? parseDateOnlyBound(dateFromParam, false) : null;
+      const dateTo = dateToParam ? parseDateOnlyBound(dateToParam, true) : null;
+      if (dateFromParam && !dateFrom) {
+        return res.status(400).json({ status: 'error', message: 'Invalid date_from. Use YYYY-MM-DD' });
+      }
+      if (dateToParam && !dateTo) {
+        return res.status(400).json({ status: 'error', message: 'Invalid date_to. Use YYYY-MM-DD' });
+      }
+      if (dateFrom || dateTo) {
+        filter['event_data.date_start'] = {};
+        if (dateFrom) filter['event_data.date_start'].$gte = dateFrom;
+        if (dateTo) filter['event_data.date_start'].$lte = dateTo;
+      }
+
+      // Source chip counts: same date/q window, all sources (ignore selected source).
+      const countsFilter = { ...filter };
+      delete countsFilter.source;
+
       const [totalEvents, docs, countsAgg] = await Promise.all([
         ParsedEventsSchema.countDocuments(filter),
         ParsedEventsSchema.find(filter)
@@ -272,6 +304,7 @@ class ParsingController {
           .limit(per_page)
           .lean(),
         ParsedEventsSchema.aggregate([
+          ...(Object.keys(countsFilter).length ? [{ $match: countsFilter }] : []),
           { $group: { _id: '$source', count: { $sum: 1 } } },
         ]),
       ]);
@@ -315,6 +348,8 @@ class ParsingController {
       res.json({
         status: 'ok',
         source: filter.source || null,
+        date_from: dateFromParam || null,
+        date_to: dateToParam || null,
         events,
         totalEvents,
         totalPages,

@@ -292,7 +292,7 @@
   <header>
     <div>
       <h1>Спаршенные мероприятия</h1>
-      <div class="sub">ParsedEvents · фильтр по источнику · просмотр без onlyPending</div>
+      <div class="sub">ParsedEvents · фильтр по источнику и дате · просмотр без onlyPending</div>
     </div>
     <div class="nav-links">
       <a href="/parsing/stats-ui">Статистика</a>
@@ -314,6 +314,14 @@
         <div class="field wide">
           <label>Поиск по названию</label>
           <input id="q" placeholder="например: concert" />
+        </div>
+        <div class="field">
+          <label>Дата от</label>
+          <input id="dateFrom" type="date" />
+        </div>
+        <div class="field">
+          <label>Дата до</label>
+          <input id="dateTo" type="date" />
         </div>
         <div class="field">
           <label>На странице</label>
@@ -343,6 +351,7 @@
       <span>Всего: <strong id="totalLabel">—</strong></span>
       <span>Страница: <strong id="pageLabel">—</strong></span>
       <span>Источник: <strong id="sourceLabel">все</strong></span>
+      <span>Даты: <strong id="dateLabel">—</strong></span>
     </div>
 
     <div id="grid" class="grid"></div>
@@ -374,6 +383,25 @@
       const saved = (localStorage.getItem('nomad_stats_base') || '').replace(/\/$/, '');
       $('baseUrl').value = saved || window.location.origin;
       $('apiKey').value = localStorage.getItem('nomad_stats_key') || '';
+    }
+
+    function toDateInputValue(d) {
+      const y = d.getFullYear();
+      const m = String(d.getMonth() + 1).padStart(2, '0');
+      const day = String(d.getDate()).padStart(2, '0');
+      return `${y}-${m}-${day}`;
+    }
+
+    /** Most recent Sunday (today if Sunday), local calendar. */
+    function lastSunday(now = new Date()) {
+      const d = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+      d.setDate(d.getDate() - d.getDay());
+      return d;
+    }
+
+    function setDefaultDateRange() {
+      $('dateFrom').value = toDateInputValue(lastSunday());
+      $('dateTo').value = toDateInputValue(new Date());
     }
 
     function headers() {
@@ -544,6 +572,9 @@
       $('totalLabel').textContent = String(state.totalEvents);
       $('pageLabel').textContent = `${state.page} / ${state.totalPages}`;
       $('sourceLabel').textContent = state.source || 'все';
+      const from = $('dateFrom').value;
+      const to = $('dateTo').value;
+      $('dateLabel').textContent = (from || to) ? `${from || '…'} — ${to || '…'}` : 'все';
       $('prevBtn').disabled = state.page <= 1;
       $('nextBtn').disabled = state.page >= state.totalPages;
 
@@ -578,6 +609,10 @@
         if (state.source) params.set('source', state.source);
         const q = $('q').value.trim();
         if (q) params.set('q', q);
+        const dateFrom = $('dateFrom').value;
+        const dateTo = $('dateTo').value;
+        if (dateFrom) params.set('date_from', dateFrom);
+        if (dateTo) params.set('date_to', dateTo);
 
         const res = await fetch(`${base()}/parsing/events/browse?${params}`, { headers: headers() });
         const data = await res.json().catch(() => ({}));
@@ -622,8 +657,15 @@
         load();
       }
     });
+    ['dateFrom', 'dateTo'].forEach((id) => {
+      $(id).addEventListener('change', () => {
+        state.page = 1;
+        load();
+      });
+    });
 
     loadCreds();
+    setDefaultDateRange();
     renderSources();
     load();
   </script>
