@@ -7,10 +7,9 @@ import {
 
 const logger = createLoggerWithSource('CATEGORY_KEYWORDS');
 
-/** Same field weights / threshold as main EventServices.detectEventCategory */
+/** Same field weights / threshold as main EventServices.detectEventCategory (no specialization). */
 const WEIGHTS = {
   name: 3,
-  specialization: 2,
   description: 1,
 };
 /** Same threshold for every source (keywords from DB only). */
@@ -30,7 +29,6 @@ export async function detectCategoryByKeywords(event, _source) {
   }
 
   const nameText = event.name ? String(event.name).toLowerCase() : '';
-  const specText = event.specialization ? String(event.specialization).toLowerCase() : '';
   const descText = event.description
     ? stripHtmlForKeywords(event.description).toLowerCase()
     : '';
@@ -59,9 +57,6 @@ export async function detectCategoryByKeywords(event, _source) {
 
       if (nameText && keywordMatchesText(nameText, keywordWord)) {
         applyWeight(keywordValue * WEIGHTS.name);
-      }
-      if (specText && keywordMatchesText(specText, keywordWord)) {
-        applyWeight(keywordValue * WEIGHTS.specialization);
       }
       if (descText && keywordMatchesText(descText, keywordWord)) {
         applyWeight(keywordValue * WEIGHTS.description);

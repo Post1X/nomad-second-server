@@ -10,7 +10,6 @@ import {
  */
 export const PRIORITY_FIELDS = [
   'source',
-  'specialization',
   'description',
   'address',
   'lat',
@@ -23,6 +22,10 @@ export const PRIORITY_FIELDS = [
   'category_resolved_by',
   'country_id',
   'admin_id',
+  'is_active',
+  'needs_manual_review',
+  'description_resolved_by',
+  'description_ai_failed',
 ];
 
 export const FULL_MATCH_FIELDS = [
@@ -37,7 +40,6 @@ export const FULL_MATCH_FIELDS = [
   'events_category_id',
   'city_id',
   'country_id',
-  'specialization',
   'photos',
   'contacts',
   'lat',
@@ -178,13 +180,6 @@ export const applyPriorityMerge = (existing, incoming, { primaryIsIncoming }) =>
     if (field === 'photos') continue; // already set via mergePhotos (replace)
     const v = primary[field];
     if (v == null || v === '') continue;
-    // Don't overwrite a real specialization with placeholder "Event"
-    if (field === 'specialization' && (v === 'Event' || /^none$/i.test(String(v)))) {
-      if (secondary.specialization && secondary.specialization !== 'Event') {
-        next.specialization = secondary.specialization;
-        continue;
-      }
-    }
     next[field] = v;
   }
 
@@ -195,14 +190,6 @@ export const applyPriorityMerge = (existing, incoming, { primaryIsIncoming }) =>
     next.is_special_point_on_map = secondary.is_special_point_on_map;
   }
 
-  if (!next.specialization || next.specialization === 'Event' || /^none$/i.test(String(next.specialization))) {
-    next.specialization = secondary.specialization && secondary.specialization !== 'Event'
-      ? secondary.specialization
-      : next.specialization;
-  }
-  if (/^none$/i.test(String(next.specialization || ''))) {
-    next.specialization = 'Другое';
-  }
   if (next.category_resolved_by === 'none' || next.category_resolved_by === 'None') {
     next.category_resolved_by = 'other';
   }
@@ -215,6 +202,7 @@ export const applyPriorityMerge = (existing, incoming, { primaryIsIncoming }) =>
   delete next.exported_at;
   delete next._mergeDates;
   delete next.coordinates; // flat lat/lon only on second
+  delete next.specialization;
 
   return { event: next, changed: true };
 };

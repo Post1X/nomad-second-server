@@ -36,7 +36,6 @@ export async function categorizeBatch(events, defaultSource = 'backfill', option
     const ev = {
       name: item.name || '',
       description: item.description || '',
-      specialization: item.specialization || '',
       address: item.address || '',
     };
 
@@ -51,7 +50,6 @@ export async function categorizeBatch(events, defaultSource = 'backfill', option
       min_price: item.min_price != null ? item.min_price : null,
       max_price: item.max_price != null ? item.max_price : null,
       currency: item.currency || '',
-      specialization: item.specialization || '',
     };
 
     const { categoryId, score } = await detectCategoryByKeywords(ev, keywordSource);
@@ -112,7 +110,6 @@ export async function categorizeBatch(events, defaultSource = 'backfill', option
         min_price: item.min_price != null ? item.min_price : null,
         max_price: item.max_price != null ? item.max_price : null,
         currency: item.currency || '',
-        specialization: item.specialization || '',
       };
       if (catId) {
         results[item.index] = {
@@ -209,7 +206,6 @@ export async function categorizeBatch(events, defaultSource = 'backfill', option
         min_price: r.min_price != null ? r.min_price : null,
         max_price: r.max_price != null ? r.max_price : null,
         currency: r.currency || '',
-        specialization: r.specialization || '',
       })),
       statistics,
       openaiUsage,

@@ -210,7 +210,7 @@ async function parseKontramarka({ meta = {}, runId }) {
 
   try {
     const {
-      adminId, countryId, cityId, specialization = 'Event', maxCities, cityName,
+      adminId, countryId, cityId, maxCities, cityName, maxTours, maxEvents,
     } = meta || {};
 
     const citiesAll = await loadCities();
@@ -259,7 +259,7 @@ async function parseKontramarka({ meta = {}, runId }) {
       try {
         await logProgress(parseRunId, `Processing city: ${cityItem.name} (${url})`);
         await page.goto(url, { waitUntil: 'networkidle2', timeout: 45000 });
-        const cards = await page.$$eval('.events__item', (items) => items.map((el) => {
+        let cards = await page.$$eval('.events__item', (items) => items.map((el) => {
           const title = el.querySelector('.block-title__text')?.textContent?.trim() || '';
           const infoItems = el.querySelectorAll('.long-event__info-item');
           const venue = infoItems[1]?.textContent?.trim() || '';
@@ -271,7 +271,15 @@ async function parseKontramarka({ meta = {}, runId }) {
           };
         }));
 
+        if (typeof maxTours === 'number' && maxTours > 0) {
+          cards = cards.slice(0, maxTours);
+          await logProgress(parseRunId, `INFO: maxTours=${maxTours}, processing ${cards.length} tours`);
+        }
+
         for (const card of cards) {
+          if (typeof maxEvents === 'number' && maxEvents > 0 && cityEvents.length >= maxEvents) {
+            break;
+          }
           scraped += 1;
           const photoUrl = card.photo
             ? (card.photo.startsWith('http')
@@ -289,6 +297,30 @@ async function parseKontramarka({ meta = {}, runId }) {
           const detail = await browser.newPage();
           try {
             await detail.goto(tourUrl, { waitUntil: 'domcontentloaded', timeout: 45000 });
+
+            // Full tour description (not the truncated schema.org meta on each schedule row).
+            const tourDescription = await detail.evaluate(() => {
+              const pick = (el) => String(el?.innerText || el?.textContent || '')
+                .replace(/\u00a0/g, ' ')
+                .replace(/[ \t]+\n/g, '\n')
+                .replace(/\n{3,}/g, '\n\n')
+                .trim();
+              const full = pick(document.querySelector('#tourSectionDesc, .tour-description'));
+              if (full && full.length > 40) return full;
+              const short = pick(document.querySelector('.tour-section-description'));
+              if (short && short.length > 40) return short;
+              // Some tours have no description block — use longest schedule itemprop (often full text).
+              const itemprops = Array.from(
+                document.querySelectorAll('#scheduleType_list meta[itemprop="description"]'),
+              )
+                .map((m) => String(m.getAttribute('content') || '').trim())
+                .filter(Boolean)
+                .sort((a, b) => b.length - a.length);
+              if (itemprops[0] && itemprops[0].length > 40) return itemprops[0];
+              const pageMeta = document.querySelector('meta[name="description"]')?.getAttribute('content') || '';
+              return String(pageMeta || '').trim();
+            });
+
             const slots = await detail.$$eval('#scheduleType_list .schedule-row', (rows) => rows.map((row) => {
               const availability = row.querySelector('[itemprop="availability"]')?.getAttribute('content')?.toLowerCase() || '';
               const actionText = row.querySelector('.schedule-col-action')?.textContent?.toLowerCase() || '';
@@ -304,7 +336,6 @@ async function parseKontramarka({ meta = {}, runId }) {
               const priceStr = row.querySelector('[itemprop="price"]')?.getAttribute('content');
               const price = priceStr ? parseFloat(priceStr.replace(',', '.')) : null;
               const image = row.querySelector('[itemprop="image"]')?.getAttribute('content') || '';
-              const description = row.querySelector('meta[itemprop="description"]')?.getAttribute('content') || '';
               return {
                 startIso,
                 endIso,
@@ -313,7 +344,6 @@ async function parseKontramarka({ meta = {}, runId }) {
                 address,
                 price,
                 image,
-                description,
               };
             }).filter(Boolean));
 
@@ -354,7 +384,7 @@ async function parseKontramarka({ meta = {}, runId }) {
                   fallbackCoords,
                   dates: [],
                   prices: [],
-                  description: slot.description || card.title,
+                  description: tourDescription || card.title,
                   photoUrl: slot.image || photoUrl,
                   tourUrl,
                 });
@@ -372,7 +402,6 @@ async function parseKontramarka({ meta = {}, runId }) {
               const newEvent = {
                 name: g.name,
                 description: g.description,
-                specialization,
                 admin_id: adminId,
                 country_id: g.resolvedCountryId,
                 city_id: g.resolvedCityId,
@@ -429,6 +458,11 @@ async function parseKontramarka({ meta = {}, runId }) {
     };
 
     allEvents = await poolAll(cities, 3, processCity);
+
+    if (typeof maxEvents === 'number' && maxEvents > 0 && allEvents.length > maxEvents) {
+      allEvents = allEvents.slice(0, maxEvents);
+      await logProgress(parseRunId, `INFO: truncated to maxEvents=${maxEvents}`);
+    }
 
     await browser.close();
     await logProgress(parseRunId, 'Browser closed');

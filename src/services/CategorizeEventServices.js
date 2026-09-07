@@ -13,8 +13,9 @@ async function getOtherCategoryId() {
 }
 
 /**
- * Categorize a single new event (keywords → AI → default_other).
- * Also fills specialization from category name when empty.
+ * After description enrich: keywords → AI → «Другое».
+ * Real category → is_active true.
+ * Cannot categorize → «Другое» + is_active false (for admin Inactive on main).
  */
 export async function categorizeNewEvent(event, source) {
   const stats = {
@@ -24,12 +25,17 @@ export async function categorizeNewEvent(event, source) {
     openaiUsage: null,
   };
 
+  delete event.specialization;
+  delete event.description_ai_failed;
+
   const { categoryId, score } = await detectCategoryByKeywords(event, source);
   event.category_keyword_score = score;
 
   if (categoryId) {
     event.events_category_id = categoryId;
     event.category_resolved_by = 'keywords';
+    event.is_active = true;
+    event.needs_manual_review = false;
     stats.categorizedByKeywords = 1;
   } else {
     const tempId = crypto.randomUUID();
@@ -42,7 +48,6 @@ export async function categorizeNewEvent(event, source) {
       name: event.name,
       description: event.description,
       address: event.address,
-      specialization: event.specialization,
       source,
     }]);
     stats.openaiUsage = usage;
@@ -51,13 +56,16 @@ export async function categorizeNewEvent(event, source) {
     if (catId) {
       event.events_category_id = catId;
       event.category_resolved_by = 'ai';
+      event.is_active = true;
+      event.needs_manual_review = false;
       stats.categorizedByAi = 1;
     } else {
       const otherId = await getOtherCategoryId();
       event.events_category_id = otherId;
-      // "other" (not none / default_other) — main may still accept default_other via pull mapping
       event.category_resolved_by = 'other';
       event.category_ai_failed = true;
+      event.is_active = false;
+      event.needs_manual_review = true;
       if (suggested) event.category_suggested_name = suggested;
       stats.noCategoryAfterAi = 1;
     }
@@ -70,19 +78,9 @@ export async function categorizeNewEvent(event, source) {
     event.category_resolved_by = 'other';
   }
 
-  // specialization: if placeholder / missing → category name (all sources)
-  const spec = String(event.specialization || '').trim();
-  if (!spec || spec === 'Event' || /^none$/i.test(spec)) {
-    if (event.events_category_id) {
-      const cat = await EventsCategoriesSchema.findById(event.events_category_id).lean();
-      if (cat?.name) {
-        event.specialization = /^none$/i.test(cat.name) ? 'Другое' : cat.name;
-      } else {
-        event.specialization = 'Другое';
-      }
-    } else {
-      event.specialization = 'Другое';
-    }
+  if (event.category_resolved_by === 'other') {
+    event.is_active = false;
+    event.needs_manual_review = true;
   }
 
   return { event, stats };

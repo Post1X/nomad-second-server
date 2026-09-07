@@ -3,6 +3,7 @@ import ParseRunsSchema from '../schemas/ParseRunsSchema';
 import ParsedEventsSchema from '../schemas/ParsedEventsSchema';
 import { processParsedEvents } from '../services/ProcessParsedEventsServices';
 import { categorizeNewEvent } from '../services/CategorizeEventServices';
+import { enrichEventDescriptions } from '../services/AiDescriptionServices';
 import {
   nameKey,
   cityKey,
@@ -25,6 +26,7 @@ const stripDeprecated = (event) => {
   delete next.fingerprint;
   delete next._mergeDates;
   delete next._tempId;
+  delete next.specialization;
   return next;
 };
 
@@ -50,6 +52,19 @@ export async function saveProcessedEvents({
     + `skippedPast=${processStats.skippedPast})`,
   );
 
+  await assertParseRunActive(parseRunId);
+  await logParseRun(
+    parseRunId,
+    `[${new Date().toISOString()}] Saving: AI description enrich for ${processed.length} events...`,
+  );
+  const { stats: descStats } = await enrichEventDescriptions(processed);
+  await logParseRun(
+    parseRunId,
+    `[${new Date().toISOString()}] Description enrich done: `
+    + `empty=${descStats.emptyOrCopy}, suspicious=${descStats.markedSuspicious}, `
+    + `rewritten=${descStats.rewritten}, leftAsIs=${descStats.leftAsIs}`,
+  );
+
   let inserted = 0;
   let updated = 0;
   let skipped = 0;
@@ -73,6 +88,7 @@ export async function saveProcessedEvents({
     openaiUsage.batches += Number(usage.batches) || 0;
     openaiUsage.failedBatches += Number(usage.failedBatches) || 0;
   };
+  addUsage(descStats.openaiUsage);
   const progressEvery = Math.max(25, Math.min(100, Math.ceil(processed.length / 20) || 25));
 
   try {
@@ -98,7 +114,11 @@ export async function saveProcessedEvents({
         addUsage(catStats.openaiUsage);
 
         const parserUniqueId = categorized.parser_unique_id || newParserUniqueId();
-        const eventData = { ...categorized, source, parser_unique_id: parserUniqueId };
+        const eventData = stripDeprecated({
+          ...categorized,
+          source,
+          parser_unique_id: parserUniqueId,
+        });
         // eslint-disable-next-line no-await-in-loop
         await ParsedEventsSchema.create({
           source,
@@ -170,18 +190,6 @@ export async function saveProcessedEvents({
         || eventData.category_resolved_by === 'default_other') {
         eventData.category_resolved_by = 'other';
       }
-      if (!eventData.specialization || eventData.specialization === 'Event'
-        || /^none$/i.test(String(eventData.specialization))) {
-        if (eventData.events_category_id) {
-          // eslint-disable-next-line no-await-in-loop
-          const EventsCategoriesSchema = (await import('../schemas/EventsCategoriesSchema')).default;
-          // eslint-disable-next-line no-await-in-loop
-          const cat = await EventsCategoriesSchema.findById(eventData.events_category_id).lean();
-          eventData.specialization = cat?.name && !/^none$/i.test(cat.name) ? cat.name : 'Другое';
-        } else {
-          eventData.specialization = 'Другое';
-        }
-      }
 
       // eslint-disable-next-line no-await-in-loop
       await ParsedEventsSchema.updateOne(
@@ -219,9 +227,14 @@ export async function saveProcessedEvents({
       categorizedByKeywords,
       categorizedByAi,
       noCategoryAfterAi,
+      descriptionEnrich: {
+        emptyOrCopy: descStats.emptyOrCopy,
+        markedSuspicious: descStats.markedSuspicious,
+        rewritten: descStats.rewritten,
+        leftAsIs: descStats.leftAsIs,
+      },
       openaiUsage,
     };
-    // UI reads process.kw/ai + openaiUsage; categorization now happens on create in upsert.
     const processForUi = {
       ...processStats,
       categorizedByKeywords,

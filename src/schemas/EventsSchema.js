@@ -25,10 +25,6 @@ const Events = new mongoose.Schema({
     required: false,
     ref: 'Admins',
   },
-  specialization: {
-    type: String,
-    required: false,
-  },
   holding_date: {
     type: String,
     required: true,
@@ -43,7 +39,8 @@ const Events = new mongoose.Schema({
   },
   description: {
     type: String,
-    required: true,
+    required: false,
+    default: '',
   },
   country: {
     type: Schema.Types.ObjectId,

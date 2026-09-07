@@ -411,7 +411,6 @@ async function parseFienta({ meta = {}, runId }) {
     countryId,
     cityId,
     cityName,
-    specialization = 'Event',
     maxCities,
   } = meta || {};
 
@@ -776,7 +775,6 @@ async function parseFienta({ meta = {}, runId }) {
         const newEvent = {
           name: pageData.name,
           description: pageData.description || pageData.name,
-          specialization,
           admin_id: adminId,
           country_id: city.country_id || countryId,
           city_id: city._id.toString(),
@@ -869,7 +867,6 @@ async function parseFienta({ meta = {}, runId }) {
         const newEvent = {
           name: pageData.name || group.original_title,
           description: pageData.description || pageData.name || group.original_title,
-          specialization,
           admin_id: adminId,
           country_id: city.country_id || countryId,
           city_id: city._id.toString(),
@@ -953,7 +950,6 @@ async function parseFienta({ meta = {}, runId }) {
           const newEvent = {
             name: pageData.name,
             description: pageData.description || pageData.name,
-            specialization,
             admin_id: adminId,
             country_id: city.country_id || countryId,
             city_id: city._id.toString(),

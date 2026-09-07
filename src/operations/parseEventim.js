@@ -406,7 +406,7 @@ async function parseEventim({ meta = {}, runId }) {
         const newEvent = {
           name: event.eventName || series.esName,
           description: series.esText || event.eventName || '',
-          specialization: 'Event',
+
           admin_id: adminId,
           country_id: resolvedCountryId || null,
           city_id: resolvedCityId
