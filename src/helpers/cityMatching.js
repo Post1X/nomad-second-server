@@ -31,11 +31,19 @@ export const splitCityNameParts = (cityName = '') => String(cityName || '')
   .map((s) => s.trim())
   .filter(Boolean);
 
+const citySearchTokens = (city = {}) => {
+  const fromName = cityTokens(city.name);
+  const fromKeywords = Array.isArray(city.keywords)
+    ? city.keywords.map((k) => normalize(k)).filter(Boolean)
+    : [];
+  return [...new Set([...fromName, ...fromKeywords])];
+};
+
 const findCityBySingleTerm = (cities, targetName = '') => {
   const target = normalize(targetName);
   if (!target) return null;
   return cities.find((c) => {
-    const tokens = cityTokens(c.name);
+    const tokens = citySearchTokens(c);
     if (tokens.some((tok) => tokensMatch(target, tok))) return true;
     return normalize(c.name) === target;
   }) || null;

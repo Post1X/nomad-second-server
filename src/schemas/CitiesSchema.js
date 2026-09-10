@@ -10,6 +10,10 @@ const Cities = new mongoose.Schema(
       type: String,
       required: true,
     },
+    keywords: {
+      type: [String],
+      default: [],
+    },
     sort: {
       type: Number,
       default: 999,
@@ -31,4 +35,3 @@ const Cities = new mongoose.Schema(
 const CitiesSchema = mongoose.model('Cities', Cities);
 
 export default CitiesSchema;
-

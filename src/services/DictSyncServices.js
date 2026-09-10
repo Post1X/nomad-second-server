@@ -53,8 +53,24 @@ const upsertById = async (Model, items, mapFn) => {
   return upserted;
 };
 
+const deleteMissingById = async (Model, remoteItems) => {
+  const remoteIds = new Set(
+    (remoteItems || []).map((item) => String(item?._id)).filter(Boolean),
+  );
+  if (remoteIds.size === 0) {
+    return 0;
+  }
+  const local = await Model.find({}).select('_id').lean();
+  const toDelete = local.filter((doc) => !remoteIds.has(String(doc._id))).map((doc) => doc._id);
+  if (!toDelete.length) {
+    return 0;
+  }
+  const result = await Model.deleteMany({ _id: { $in: toDelete } });
+  return result.deletedCount || 0;
+};
+
 class DictSyncServices {
-    static async pullFromMainServer() {
+  static async pullFromMainServer() {
     const mainUrl = ENV.MAIN_SERVER_URL;
     const apiKey = ENV.MAIN_SERVER_API_KEY || ENV.PARSING_SERVER_API_KEY;
 
@@ -81,6 +97,7 @@ class DictSyncServices {
     const countriesUpserted = await upsertById(CountriesSchema, countries, (c) => ({
       name: c.name,
       flag_url: c.flag_url || '',
+      keywords: Array.isArray(c.keywords) ? c.keywords : [],
     }));
 
     const citiesUpserted = await upsertById(CitiesSchema, cities, (c) => ({
@@ -88,6 +105,7 @@ class DictSyncServices {
       name: c.name,
       sort: c.sort ?? 999,
       coordinates: c.coordinates || { lat: '0', lon: '0' },
+      keywords: Array.isArray(c.keywords) ? c.keywords : [],
     }));
 
     const categoriesUpserted = await upsertById(EventsCategoriesSchema, eventCategories, (c) => ({
@@ -96,14 +114,9 @@ class DictSyncServices {
       keywords: Array.isArray(c.keywords) ? c.keywords : [],
     }));
 
-        const remoteIds = new Set(eventCategories.map((c) => String(c._id)));
-    if (remoteIds.size > 0) {
-      const local = await EventsCategoriesSchema.find({}).select('_id').lean();
-      const toDelete = local.filter((c) => !remoteIds.has(String(c._id))).map((c) => c._id);
-      if (toDelete.length) {
-        await EventsCategoriesSchema.deleteMany({ _id: { $in: toDelete } });
-      }
-    }
+    const countriesDeleted = await deleteMissingById(CountriesSchema, countries);
+    const citiesDeleted = await deleteMissingById(CitiesSchema, cities);
+    const categoriesDeleted = await deleteMissingById(EventsCategoriesSchema, eventCategories);
 
     const promptResult = await rebuildAiPromptIfNeeded();
 
@@ -111,6 +124,9 @@ class DictSyncServices {
       countriesUpserted,
       citiesUpserted,
       categoriesUpserted,
+      countriesDeleted,
+      citiesDeleted,
+      categoriesDeleted,
       aiPromptUpdated: promptResult.updated,
     };
     logger.info(`Dict sync done: ${JSON.stringify(stats)}`);

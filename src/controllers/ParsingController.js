@@ -607,83 +607,96 @@ class ParsingController {
         });
       }
 
-      let countriesCreated = 0;
-      let citiesCreated = 0;
+      let countriesUpserted = 0;
+      let citiesUpserted = 0;
       let countriesDeleted = 0;
       let citiesDeleted = 0;
       let categoriesUpserted = 0;
+      let categoriesDeleted = 0;
+
+      const mapCountry = (country) => ({
+        name: country.name,
+        flag_url: country.flag_url || '',
+        keywords: Array.isArray(country.keywords) ? country.keywords : [],
+      });
+
+      const mapCity = (city) => ({
+        country_id: city.country_id,
+        name: city.name,
+        sort: city.sort ?? 999,
+        coordinates: city.coordinates || { lat: '0', lon: '0' },
+        keywords: Array.isArray(city.keywords) ? city.keywords : [],
+      });
 
       if (replaceAll) {
         const deleteCountriesResult = await CountriesSchema.deleteMany({});
-        countriesDeleted = deleteCountriesResult.deletedCount;
+        countriesDeleted = deleteCountriesResult.deletedCount || 0;
         if (countries.length > 0) {
           await CountriesSchema.insertMany(
             countries.map((country) => ({
               _id: country._id,
-              name: country.name,
-              flag_url: country.flag_url || '',
+              ...mapCountry(country),
             })),
             { ordered: false },
           ).catch((err) => {
             if (err.code !== 11000) throw err;
           });
-          countriesCreated = countries.length;
+          countriesUpserted = countries.length;
         }
-      } else if (countries.length > 0) {
-        const existingCountryIds = await CountriesSchema.find({}).select('_id').lean();
-        const existingIdsSet = new Set(existingCountryIds.map((c) => c._id.toString()));
-        const newCountries = countries.filter((c) => !existingIdsSet.has(c._id.toString()));
-        if (newCountries.length > 0) {
-          await CountriesSchema.insertMany(
-            newCountries.map((country) => ({
-              _id: country._id,
-              name: country.name,
-              flag_url: country.flag_url || '',
-            })),
-            { ordered: false },
-          ).catch((err) => {
-            if (err.code !== 11000) throw err;
-          });
-          countriesCreated = newCountries.length;
-        }
-      }
 
-      if (replaceAll) {
         const deleteCitiesResult = await CitiesSchema.deleteMany({});
-        citiesDeleted = deleteCitiesResult.deletedCount;
+        citiesDeleted = deleteCitiesResult.deletedCount || 0;
         if (cities.length > 0) {
           await CitiesSchema.insertMany(
             cities.map((city) => ({
               _id: city._id,
-              country_id: city.country_id,
-              name: city.name,
-              sort: city.sort || 999,
-              coordinates: city.coordinates || { lat: '0', lon: '0' },
+              ...mapCity(city),
             })),
             { ordered: false },
           ).catch((err) => {
             if (err.code !== 11000) throw err;
           });
-          citiesCreated = cities.length;
+          citiesUpserted = cities.length;
         }
-      } else if (cities.length > 0) {
-        const existingCityIds = await CitiesSchema.find({}).select('_id').lean();
-        const existingIdsSet = new Set(existingCityIds.map((c) => c._id.toString()));
-        const newCities = cities.filter((c) => !existingIdsSet.has(c._id.toString()));
-        if (newCities.length > 0) {
-          await CitiesSchema.insertMany(
-            newCities.map((city) => ({
-              _id: city._id,
-              country_id: city.country_id,
-              name: city.name,
-              sort: city.sort || 999,
-              coordinates: city.coordinates || { lat: '0', lon: '0' },
-            })),
-            { ordered: false },
-          ).catch((err) => {
-            if (err.code !== 11000) throw err;
-          });
-          citiesCreated = newCities.length;
+      } else {
+        for (const country of countries) {
+          if (!country?._id) continue;
+          // eslint-disable-next-line no-await-in-loop
+          await CountriesSchema.findByIdAndUpdate(
+            country._id,
+            { $set: mapCountry(country) },
+            { upsert: true, setDefaultsOnInsert: true },
+          );
+          countriesUpserted += 1;
+        }
+        if (countries.length > 0) {
+          const remoteIds = new Set(countries.map((c) => String(c._id)));
+          const local = await CountriesSchema.find({}).select('_id').lean();
+          const toDelete = local.filter((c) => !remoteIds.has(String(c._id))).map((c) => c._id);
+          if (toDelete.length) {
+            const result = await CountriesSchema.deleteMany({ _id: { $in: toDelete } });
+            countriesDeleted = result.deletedCount || 0;
+          }
+        }
+
+        for (const city of cities) {
+          if (!city?._id) continue;
+          // eslint-disable-next-line no-await-in-loop
+          await CitiesSchema.findByIdAndUpdate(
+            city._id,
+            { $set: mapCity(city) },
+            { upsert: true, setDefaultsOnInsert: true },
+          );
+          citiesUpserted += 1;
+        }
+        if (cities.length > 0) {
+          const remoteIds = new Set(cities.map((c) => String(c._id)));
+          const local = await CitiesSchema.find({}).select('_id').lean();
+          const toDelete = local.filter((c) => !remoteIds.has(String(c._id))).map((c) => c._id);
+          if (toDelete.length) {
+            const result = await CitiesSchema.deleteMany({ _id: { $in: toDelete } });
+            citiesDeleted = result.deletedCount || 0;
+          }
         }
       }
 
@@ -708,7 +721,8 @@ class ParsingController {
         const local = await EventsCategoriesSchema.find({}).select('_id').lean();
         const toDelete = local.filter((c) => !remoteIds.has(String(c._id))).map((c) => c._id);
         if (toDelete.length) {
-          await EventsCategoriesSchema.deleteMany({ _id: { $in: toDelete } });
+          const result = await EventsCategoriesSchema.deleteMany({ _id: { $in: toDelete } });
+          categoriesDeleted = result.deletedCount || 0;
         }
         await rebuildAiPromptIfNeeded();
       }
@@ -717,9 +731,9 @@ class ParsingController {
         status: 'ok',
         message: 'Sync completed',
         statistics: {
-          countries: { created: countriesCreated, deleted: countriesDeleted },
-          cities: { created: citiesCreated, deleted: citiesDeleted },
-          eventCategories: { upserted: categoriesUpserted },
+          countries: { upserted: countriesUpserted, deleted: countriesDeleted },
+          cities: { upserted: citiesUpserted, deleted: citiesDeleted },
+          eventCategories: { upserted: categoriesUpserted, deleted: categoriesDeleted },
         },
       });
     } catch (error) {

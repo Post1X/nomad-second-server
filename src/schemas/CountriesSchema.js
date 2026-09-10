@@ -5,6 +5,10 @@ const Countries = new mongoose.Schema(
     name: {
       type: String,
     },
+    keywords: {
+      type: [String],
+      default: [],
+    },
     flag_url: {
       type: String,
     },
@@ -15,4 +19,3 @@ const Countries = new mongoose.Schema(
 const CountriesSchema = mongoose.model('Countries', Countries);
 
 export default CountriesSchema;
-
