@@ -456,7 +456,7 @@ async function parseIsraelinfo({ meta = {}, runId }) {
       const newEvent = {
         name: item.title || 'Event',
         description: plain || item.title || '',
-        specialization: meta.specialization || 'Event',
+
         admin_id: meta.adminId || null,
         country_id: countryId ? String(countryId) : null,
         city_id: cityId ? String(cityId) : null,

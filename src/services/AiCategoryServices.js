@@ -159,12 +159,9 @@ const eventPayloadLine = (ev) => {
   // Useless when parser copied the title into description
   if (description && description.trim() === name.trim()) description = '';
 
-  const spec = String(ev.specialization || ev.specialization_name || '').trim();
   const address = String(ev.address || '').slice(0, 160);
   const payload = { id: ev.tempId, name };
   if (description) payload.description = description;
-  // Skip noise like Ticketmaster "Event"
-  if (spec && !/^event$/i.test(spec)) payload.specialization = spec.slice(0, 80);
   if (address) payload.address = address;
   return JSON.stringify(payload);
 };

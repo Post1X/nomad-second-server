@@ -65,7 +65,8 @@ export const OPERATION_TYPE_BY_SOURCE = Object.fromEntries(
   Object.entries(SOURCE_BY_OPERATION_TYPE).map(([type, source]) => [source, type]),
 );
 
-export const TICKETMASTER_PARSE_INTERVAL_DAYS = 21;
+/** Ticketmaster cron fires weekly; skip run if last parse was fewer than N days ago. */
+export const TICKETMASTER_PARSE_INTERVAL_DAYS = 7;
 
 /** ISO 3166-1 alpha-2 — страны с покрытием Ticketmaster Discovery (Discovery Feed docs). */
 export const TICKETMASTER_COUNTRY_CODES = [

@@ -11,9 +11,9 @@ import saveProcessedEvents from '../helpers/saveProcessedEvents';
 import { assertParseRunActive, logParseRun } from '../helpers/logParseRun';
 import createCitySuggestionCollector from '../helpers/createCitySuggestionCollector';
 import {
-  hasSufficientTicketmasterText,
   pickTicketmasterBodyText,
   TM_MIN_DESCRIPTION_LENGTH,
+  hasSufficientTicketmasterText,
 } from '../helpers/ticketmasterDescription';
 
 const logger = createLoggerWithSource('PARSE_TICKETMASTER');
@@ -281,13 +281,12 @@ const parseEventsForCountry = async ({
   const events = [];
   let skippedNoVenue = 0;
   let skippedNoCity = 0;
-  let skippedThinDescription = 0;
+  let thinDescriptionKept = 0;
 
   const {
     adminId,
     countryId: metaCountryId,
     cityId: metaCityId,
-    specialization = 'Event',
   } = meta;
 
   const matchedCountry = findCountryByIso(countries, countryCode);
@@ -397,20 +396,18 @@ const parseEventsForCountry = async ({
 
         if (!dateStart) continue;
 
-        // Reject events without usable Discovery copy (info / description / pleaseNote).
+        // Keep thin/missing Discovery copy — AI description enrich runs on save.
+        const bodyText = pickTicketmasterBodyText(event);
         if (!hasSufficientTicketmasterText(event)) {
-          skippedThinDescription += 1;
-          continue;
+          thinDescriptionKept += 1;
         }
 
         const address = buildAddress(venue);
         const imageUrl = pickBestImage(event.images);
-        const bodyText = pickTicketmasterBodyText(event);
 
         const newEvent = {
           name: event.name,
           description: bodyText,
-          specialization,
           admin_id: adminId,
           country_id: resolvedCountryId
             ? (resolvedCountryId?.toString ? resolvedCountryId.toString() : String(resolvedCountryId))
@@ -485,7 +482,7 @@ const parseEventsForCountry = async ({
   }
 
   return {
-    events, skippedNoVenue, skippedNoCity, skippedThinDescription,
+    events, skippedNoVenue, skippedNoCity, thinDescriptionKept,
   };
 };
 
@@ -519,7 +516,7 @@ async function parseTicketmaster({ meta = {}, runId }) {
 
   let skippedNoVenue = 0;
   let skippedNoCity = 0;
-  let skippedThinDescription = 0;
+  let thinDescriptionKept = 0;
   let countriesProcessed = 0;
   let countryCodes = [];
   const parsedByCountry = {};
@@ -555,7 +552,7 @@ async function parseTicketmaster({ meta = {}, runId }) {
         events.push(...result.events);
         skippedNoVenue += result.skippedNoVenue;
         skippedNoCity += result.skippedNoCity;
-        skippedThinDescription += result.skippedThinDescription || 0;
+        thinDescriptionKept += result.thinDescriptionKept || 0;
         parsedByCountry[countryCode] = result.events.length;
         countriesProcessed += 1;
         // eslint-disable-next-line no-await-in-loop
@@ -563,7 +560,7 @@ async function parseTicketmaster({ meta = {}, runId }) {
           parseRunId,
           `[${new Date().toISOString()}] Country ${countryCode} done: `
           + `${result.events.length} kept `
-          + `(noCity=${result.skippedNoCity}, thinDesc=${result.skippedThinDescription || 0})`,
+          + `(noCity=${result.skippedNoCity}, thinDescKept=${result.thinDescriptionKept || 0})`,
         );
       } catch (countryError) {
         if (countryError?.cancelled) throw countryError;
@@ -599,10 +596,10 @@ async function parseTicketmaster({ meta = {}, runId }) {
   }
 
   const skippedCitiesOver5 = buildSkippedCitiesSummary(skippedByCity);
-  if (skippedThinDescription > 0) {
+  if (thinDescriptionKept > 0) {
     infoTexts.push(
-      `Skipped ${skippedThinDescription} events with Discovery text `
-      + `< ${TM_MIN_DESCRIPTION_LENGTH} chars (info/description/pleaseNote)`,
+      `Kept ${thinDescriptionKept} events with Discovery text `
+      + `< ${TM_MIN_DESCRIPTION_LENGTH} chars for AI description enrich`,
     );
   }
   const extraStatistics = {
@@ -611,7 +608,7 @@ async function parseTicketmaster({ meta = {}, runId }) {
     parsedByCountry,
     skippedNoVenue,
     skippedNoCity,
-    skippedThinDescription,
+    thinDescriptionKept,
     minDescriptionLength: TM_MIN_DESCRIPTION_LENGTH,
     skippedCitiesOver5,
     citySuggestions: citySuggestionStats,

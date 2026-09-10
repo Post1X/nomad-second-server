@@ -51,7 +51,6 @@ export async function lookupParsedEvents(items = []) {
       date_end: e.date_end || null,
       min_price: e.min_price ?? null,
       max_price: e.max_price ?? null,
-      specialization: e.specialization || '',
       city_id: e.city_id ? String(e.city_id) : cid,
       country_id: e.country_id ? String(e.country_id) : null,
       events_category_id: e.events_category_id ? String(e.events_category_id) : null,

@@ -186,7 +186,6 @@ class BackfillStatsServices {
       min_price: row.min_price != null ? row.min_price : null,
       max_price: row.max_price != null ? row.max_price : null,
       currency: row.currency || '',
-      specialization: row.specialization || '',
       source: row.source || 'unknown',
       resolved_by: row.resolved_by || 'unknown',
       enriched_description: !!row.enriched_description,

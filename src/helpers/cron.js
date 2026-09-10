@@ -22,7 +22,7 @@ export const CRON_JOBS = [
     kind: 'parse',
     source: EVENT_SOURCE.kontramarka,
     type: OPERATION_TYPES.parsingEventsFromKontramarka,
-    meta: { specialization: 'Event' },
+    meta: {},
   },
   {
     id: 'eventim',
@@ -40,16 +40,16 @@ export const CRON_JOBS = [
     kind: 'parse',
     source: EVENT_SOURCE.fienta,
     type: OPERATION_TYPES.parsingEventsFromFienta,
-    meta: { specialization: 'Event' },
+    meta: {},
   },
   {
     id: 'ticketmaster',
     expr: '0 2 * * 0',
-    label: 'Ticketmaster (every 3 weeks)',
+    label: 'Ticketmaster (weekly)',
     kind: 'parse',
     source: EVENT_SOURCE.ticketmaster,
     type: OPERATION_TYPES.parsingEventsFromTicketmaster,
-    meta: { specialization: 'Event' },
+    meta: {},
   },
   {
     id: 'israelinfo',
@@ -58,7 +58,7 @@ export const CRON_JOBS = [
     kind: 'parse',
     source: EVENT_SOURCE.israelinfo,
     type: OPERATION_TYPES.parsingEventsFromIsraelinfo,
-    meta: { specialization: 'Event' },
+    meta: {},
   },
   {
     id: 'dictSync',
@@ -164,7 +164,7 @@ const markTicketmasterParsed = async () => {
  * Run a cron job now (manual or scheduled).
  * @param {string} jobId
  * @param {{ force?: boolean, ignoreEnabled?: boolean }} [options]
- *   force — skip Ticketmaster 21d interval
+ *   force — skip Ticketmaster weekly interval gate
  *   ignoreEnabled — run even if job toggle is OFF (manual UI)
  */
 export async function runCronJob(jobId, options = {}) {
@@ -184,7 +184,7 @@ export async function runCronJob(jobId, options = {}) {
   if (job.kind === 'parse') {
     if (jobId === 'ticketmaster' && !options.force) {
       if (!(await shouldRunTicketmaster())) {
-        logger.info('Skip Ticketmaster parse: interval < 21 days');
+        logger.info(`Skip Ticketmaster parse: interval < ${TICKETMASTER_PARSE_INTERVAL_DAYS} days`);
         return { skipped: true, reason: 'interval', jobId };
       }
     }

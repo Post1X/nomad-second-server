@@ -32,7 +32,6 @@ const BackfillRunsSchema = new mongoose.Schema({
       min_price: Number,
       max_price: Number,
       currency: String,
-      specialization: String,
     }],
     default: [],
   },
