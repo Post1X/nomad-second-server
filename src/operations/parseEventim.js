@@ -415,6 +415,7 @@ async function parseEventim({ meta = {}, runId }) {
           contacts: { website: event.eventLink || series.esLink || '' },
           photos: photoUrl ? [{ full_url: photoUrl }] : [],
           holding_date: holdingDate,
+          holding_dates_list: dateStart ? [dateStart] : [],
           date_start: dateStart,
           date_end: dateStart,
           source: EVENT_SOURCE.eventim,

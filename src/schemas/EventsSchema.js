@@ -29,6 +29,11 @@ const Events = new mongoose.Schema({
     type: String,
     required: true,
   },
+  holding_dates_list: {
+    type: [Date],
+    required: false,
+    default: [],
+  },
   date_start: {
     type: Date,
     required: false,

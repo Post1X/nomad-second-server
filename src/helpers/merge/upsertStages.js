@@ -34,6 +34,7 @@ export const FULL_MATCH_FIELDS = [
   'date_start',
   'date_end',
   'holding_date',
+  'holding_dates_list',
   'min_price',
   'max_price',
   'description',
@@ -67,6 +68,7 @@ const sameScalar = (a, b) => {
 /** Collect dates from _mergeDates, start/end, and parse holding_date → array. */
 export const collectDates = (event) => {
   const dates = [];
+  if (Array.isArray(event?.holding_dates_list)) dates.push(...event.holding_dates_list);
   if (event?._mergeDates) dates.push(...event._mergeDates);
   if (event?.date_start) dates.push(event.date_start);
   if (event?.date_end) dates.push(event.date_end);
@@ -153,6 +155,9 @@ export const unionDatesAndPrices = (existing = {}, incoming = {}) => {
       || existing.holding_date
       || incoming.holding_date
       || '',
+    holding_dates_list: merged.holding_dates_list?.length
+      ? merged.holding_dates_list
+      : (existing.holding_dates_list || incoming.holding_dates_list || []),
     min_price: prices.length ? Math.min(...prices) : (existing.min_price ?? incoming.min_price ?? null),
     max_price: prices.length ? Math.max(...prices) : (existing.max_price ?? incoming.max_price ?? null),
   };

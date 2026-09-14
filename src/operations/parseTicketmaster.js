@@ -418,6 +418,7 @@ const parseEventsForCountry = async ({
           contacts: { website: event.url || '' },
           photos: imageUrl ? [{ full_url: imageUrl }] : [],
           holding_date: formatHoldingDate([dateStart]),
+          holding_dates_list: dateStart ? [dateStart] : [],
           date_start: dateStart,
           date_end: dateStart,
           source: EVENT_SOURCE.ticketmaster,

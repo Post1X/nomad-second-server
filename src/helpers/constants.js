@@ -4,6 +4,7 @@ export const OPERATION_TYPES = {
   parsingEventsFromEventim: 'parsingEventsFromEventim',
   parsingEventsFromTicketmaster: 'parsingEventsFromTicketmaster',
   parsingEventsFromIsraelinfo: 'parsingEventsFromIsraelinfo',
+  parsingEventsFromShowman: 'parsingEventsFromShowman',
 };
 
 export const OPERATION_STATUSES = {
@@ -21,6 +22,7 @@ export const EVENT_SOURCE = {
   eventim: 'eventim',
   ticketmaster: 'ticketmaster',
   israelinfo: 'israelinfo',
+  showman: 'showman',
 };
 
 /**
@@ -31,6 +33,7 @@ export const SOURCE_PRIORITY = {
   [EVENT_SOURCE.eventim]: 100,
   [EVENT_SOURCE.ticketmaster]: 100,
   [EVENT_SOURCE.israelinfo]: 90,
+  [EVENT_SOURCE.showman]: 90,
   [EVENT_SOURCE.kontramarka]: 50,
   [EVENT_SOURCE.fienta]: 50,
   [EVENT_SOURCE.nomad]: 10,
@@ -59,6 +62,7 @@ export const SOURCE_BY_OPERATION_TYPE = {
   [OPERATION_TYPES.parsingEventsFromEventim]: EVENT_SOURCE.eventim,
   [OPERATION_TYPES.parsingEventsFromTicketmaster]: EVENT_SOURCE.ticketmaster,
   [OPERATION_TYPES.parsingEventsFromIsraelinfo]: EVENT_SOURCE.israelinfo,
+  [OPERATION_TYPES.parsingEventsFromShowman]: EVENT_SOURCE.showman,
 };
 
 export const OPERATION_TYPE_BY_SOURCE = Object.fromEntries(

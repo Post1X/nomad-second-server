@@ -463,6 +463,7 @@ async function parseIsraelinfo({ meta = {}, runId }) {
         contacts: { website: item.link || '' },
         photos: photo ? [{ full_url: photo }] : [],
         holding_date: holding,
+        holding_dates_list: dates,
         date_start: dateStart,
         date_end: dateEnd,
         source: EVENT_SOURCE.israelinfo,

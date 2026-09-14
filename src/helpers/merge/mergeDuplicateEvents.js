@@ -53,6 +53,12 @@ export const mergeDuplicateEvents = (events, { source = '' } = {}) => {
     const dateStart = validDates.length ? new Date(Math.min(...validDates.map(toTime))) : first.date_start || null;
     const dateEnd = validDates.length ? new Date(Math.max(...validDates.map(toTime))) : first.date_end || null;
     const holdingDateStr = formatHoldingDate(validDates.length ? validDates : []);
+    const holdingDatesList = validDates.length
+      ? validDates
+        .map((d) => (d instanceof Date ? d : new Date(d)))
+        .filter((d) => !Number.isNaN(d.getTime()))
+        .sort((a, b) => a.getTime() - b.getTime())
+      : [];
 
     const longerDesc = g.events.reduce((best, cur) => (
       String(cur.description || '').length > String(best.description || '').length ? cur : best
@@ -65,6 +71,9 @@ export const mergeDuplicateEvents = (events, { source = '' } = {}) => {
       date_start: dateStart,
       date_end: dateEnd,
       holding_date: holdingDateStr || first.holding_date || '',
+      holding_dates_list: holdingDatesList.length
+        ? holdingDatesList
+        : (first.holding_dates_list || []),
       min_price: g.prices.length ? Math.min(...g.prices) : first.min_price,
       max_price: g.prices.length ? Math.max(...g.prices) : first.max_price,
     };
