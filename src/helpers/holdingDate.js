@@ -31,6 +31,7 @@ const formatDayRanges = (dayNumbers) => {
   return result.join(', ');
 };
 
+/** Unique calendar days (time stripped) — for display strings / text parse. */
 const uniqueSortedDays = (dates = []) => {
   const valid = (dates || [])
     .map((d) => (d instanceof Date ? d : new Date(d)))
@@ -43,6 +44,23 @@ const uniqueSortedDays = (dates = []) => {
     if (seen.has(key)) continue;
     seen.add(key);
     unique.push(new Date(d.getFullYear(), d.getMonth(), d.getDate()));
+  }
+  return unique;
+};
+
+/** Unique datetimes as-is (time preserved) — for holding_dates_list storage. */
+const uniqueSortedDatetimes = (dates = []) => {
+  const valid = (dates || [])
+    .map((d) => (d instanceof Date ? new Date(d.getTime()) : new Date(d)))
+    .filter((d) => !Number.isNaN(d.getTime()))
+    .sort((a, b) => a.getTime() - b.getTime());
+  const unique = [];
+  const seen = new Set();
+  for (const d of valid) {
+    const key = d.getTime();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    unique.push(d);
   }
   return unique;
 };
@@ -225,7 +243,22 @@ export const parseHoldingDate = (holdingDate = '') => {
 
 export const toHoldingDatesList = (input) => {
   if (!Array.isArray(input) || !input.length) return [];
-  return uniqueSortedDays(input);
+  return uniqueSortedDatetimes(input.map((item) => {
+    if (item instanceof Date) return item;
+    if (typeof item === 'string') {
+      const ymd = item.trim().match(/^(\d{4})-(\d{2})-(\d{2})$/);
+      if (ymd) {
+        return new Date(
+          Date.UTC(
+            parseInt(ymd[1], 10),
+            parseInt(ymd[2], 10) - 1,
+            parseInt(ymd[3], 10),
+          ),
+        );
+      }
+    }
+    return new Date(item);
+  }));
 };
 
 export const resolveHoldingFields = ({
@@ -271,7 +304,7 @@ export const mergeHoldingDates = (...holdingOrDateLists) => {
     else if (item instanceof Date) all.push(item);
     else if (item) all.push(new Date(item));
   }
-  const unique = uniqueSortedDays(all);
+  const unique = uniqueSortedDatetimes(all);
   return {
     dates: unique,
     holding_dates_list: unique,

@@ -47,6 +47,7 @@ export async function lookupParsedEvents(items = []) {
       source: doc.source || e.source || null,
       description: e.description || '',
       holding_date: e.holding_date || '',
+      holding_dates_list: Array.isArray(e.holding_dates_list) ? e.holding_dates_list : [],
       date_start: e.date_start || null,
       date_end: e.date_end || null,
       min_price: e.min_price ?? null,
