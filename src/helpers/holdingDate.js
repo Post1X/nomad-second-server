@@ -201,43 +201,57 @@ export const parseHoldingDate = (holdingDate = '') => {
     декабря: 11, декабрь: 11,
   };
   const monthNames = Object.keys(months).sort((a, b) => b.length - a.length);
+  const monthAlt = monthNames.join('|');
 
-  const parseRuSegment = (segment, fallbackYear) => {
-    const seg = String(segment || '').trim();
-    if (!seg) return [];
-    const lower = seg.toLowerCase();
-    const yearMatch = seg.match(/\b(20\d{2})\b/);
-    const year = yearMatch ? parseInt(yearMatch[1], 10) : fallbackYear;
-    const monthName = monthNames.find((name) => lower.includes(name));
-    if (monthName == null) return [];
-    const month = months[monthName];
-    const beforeMonth = lower.split(monthName)[0] || '';
+  const daysFromTokens = (dayPart, year, month) => {
     const days = [];
-    const range = beforeMonth.match(/(\d{1,2})\s*[–-]\s*(\d{1,2})/);
-    if (range) {
-      for (let d = parseInt(range[1], 10); d <= parseInt(range[2], 10); d += 1) {
-        days.push(new Date(year, month, d));
+    const tokenRe = /(\d{1,2})\s*[–-]\s*(\d{1,2})|(\d{1,2})/g;
+    let tm;
+    while ((tm = tokenRe.exec(dayPart)) !== null) {
+      if (tm[1] != null) {
+        const a = parseInt(tm[1], 10);
+        const b = parseInt(tm[2], 10);
+        for (let d = a; d <= b; d += 1) days.push(new Date(year, month, d));
+      } else {
+        days.push(new Date(year, month, parseInt(tm[3], 10)));
       }
-      return days;
-    }
-    for (const bit of beforeMonth.match(/\d{1,2}/g) || []) {
-      days.push(new Date(year, month, parseInt(bit, 10)));
     }
     return days;
   };
 
   const fallbackYear = (() => {
-    const ym = text.match(/\b(20\d{2})\b/);
-    return ym ? parseInt(ym[1], 10) : new Date().getFullYear();
+    const years = [...text.matchAll(/\b(20\d{2})\b/g)].map((x) => parseInt(x[1], 10));
+    if (!years.length) return new Date().getFullYear();
+    return years[years.length - 1];
   })();
 
-  const segments = text.split(',').map((s) => s.trim()).filter(Boolean);
-  if (segments.length > 1) {
-    for (const seg of segments) out.push(...parseRuSegment(seg, fallbackYear));
-    if (out.length) return uniqueSortedDays(out);
+  // Chunks like: "15, 22, 29 сентябрь" / "6–8, 10 май 2027" / "1–2 октябрь 2026"
+  const chunkRe = new RegExp(
+    `((?:\\d{1,2}\\s*[–-]\\s*\\d{1,2}|\\d{1,2})(?:\\s*,\\s*(?:\\d{1,2}\\s*[–-]\\s*\\d{1,2}|\\d{1,2}))*)\\s+(${monthAlt})(?:\\s+(20\\d{2}))?`,
+    'gi',
+  );
+  const chunks = [];
+  let cm;
+  while ((cm = chunkRe.exec(text)) !== null) {
+    chunks.push({
+      dayPart: cm[1],
+      month: months[cm[2].toLowerCase()],
+      year: cm[3] ? parseInt(cm[3], 10) : null,
+    });
   }
 
-  out.push(...parseRuSegment(text, fallbackYear));
+  if (chunks.length) {
+    let year = fallbackYear;
+    for (let i = chunks.length - 1; i >= 0; i -= 1) {
+      if (chunks[i].year != null) year = chunks[i].year;
+      else chunks[i].year = year;
+    }
+    for (const ch of chunks) {
+      out.push(...daysFromTokens(ch.dayPart, ch.year, ch.month));
+    }
+    return uniqueSortedDays(out);
+  }
+
   return uniqueSortedDays(out);
 };
 

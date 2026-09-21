@@ -1,7 +1,10 @@
 import crypto from 'crypto';
 import EventsCategoriesSchema from '../schemas/EventsCategoriesSchema';
 import { detectCategoryByKeywords } from './CategoryKeywordServices';
-import { categorizeEventsWithAi } from './AiCategoryServices';
+import {
+  categorizeEventsWithAi,
+  categorizeEventWithWeb,
+} from './AiCategoryServices';
 
 let otherCategoryIdCache = null;
 
@@ -12,21 +15,45 @@ async function getOtherCategoryId() {
   return otherCategoryIdCache;
 }
 
+const eventWebsite = (event) => String(
+  event?.contacts?.website || event?.website || event?.url || '',
+).trim();
+
 /**
- * After description enrich: keywords → AI → «Другое».
- * Real category → is_active true.
- * Cannot categorize → «Другое» + is_active false (for admin Inactive on main).
+ * After description enrich:
+ * - if website → page/web grounded AI first (fixes «концерт»→Музыка for comedians, «показ»→Мода for films)
+ * - else keywords → AI → «Другое»
  */
 export async function categorizeNewEvent(event, source) {
   const stats = {
     categorizedByKeywords: 0,
     categorizedByAi: 0,
+    categorizedByWeb: 0,
     noCategoryAfterAi: 0,
     openaiUsage: null,
   };
 
   delete event.specialization;
   delete event.description_ai_failed;
+
+  const website = eventWebsite(event);
+  if (website) {
+    try {
+      const web = await categorizeEventWithWeb(event);
+      stats.openaiUsage = web.usage;
+      if (web.categoryId) {
+        event.events_category_id = web.categoryId;
+        event.category_resolved_by = web.usedWeb ? 'ai_web' : 'ai_page';
+        event.category_confidence = web.confidence;
+        event.is_active = true;
+        event.needs_manual_review = false;
+        stats.categorizedByWeb = 1;
+        return { event, stats };
+      }
+    } catch (e) {
+      // fall through to keywords / batch AI
+    }
+  }
 
   const { categoryId, score } = await detectCategoryByKeywords(event, source);
   event.category_keyword_score = score;
