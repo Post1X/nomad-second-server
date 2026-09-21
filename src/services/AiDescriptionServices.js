@@ -359,8 +359,10 @@ export async function enrichEventDescriptions(events, options = {}) {
   const needRewrite = new Set();
 
   for (const row of withIds) {
-    if (forceAll || isEmptyOrTitleCopy(row.ev)) {
+    if (isEmptyOrTitleCopy(row.ev)) {
       stats.emptyOrCopy += 1;
+      needRewrite.add(row.tempId);
+    } else if (forceAll) {
       needRewrite.add(row.tempId);
     } else {
       needSuspicionCheck.push(row);

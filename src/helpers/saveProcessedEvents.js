@@ -57,12 +57,17 @@ export async function saveProcessedEvents({
     parseRunId,
     `[${new Date().toISOString()}] Saving: AI description enrich for ${processed.length} events...`,
   );
-  const { stats: descStats } = await enrichEventDescriptions(processed);
+  // Showman feed descriptions are marketing junk — always rewrite from page/web.
+  const forceAllDescriptions = source === 'showman';
+  const { stats: descStats } = await enrichEventDescriptions(processed, {
+    forceAll: forceAllDescriptions,
+  });
   await logParseRun(
     parseRunId,
     `[${new Date().toISOString()}] Description enrich done: `
     + `empty=${descStats.emptyOrCopy}, suspicious=${descStats.markedSuspicious}, `
-    + `rewritten=${descStats.rewritten}, leftAsIs=${descStats.leftAsIs}`,
+    + `rewritten=${descStats.rewritten}, leftAsIs=${descStats.leftAsIs}`
+    + (forceAllDescriptions ? ' (forceAll=showman)' : ''),
   );
 
   let inserted = 0;
