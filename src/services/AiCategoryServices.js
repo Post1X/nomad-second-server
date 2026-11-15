@@ -9,6 +9,8 @@ import {
   formatCategoryCardsForPrompt,
 } from '../config/categoryCards';
 import { createLoggerWithSource } from '../helpers/logger';
+import { fetchEventPageFacts } from '../helpers/fetchEventPageFacts';
+import { webSearchEventFacts } from '../helpers/openaiWebFacts';
 
 const logger = createLoggerWithSource('AI_CATEGORY');
 
@@ -30,9 +32,14 @@ ${cards}
 
 RULES:
 1) Return categoryId from the cards above if the event fits the "use" guidance.
-2) Respect NOT: never put concerts/bands/DJ/tour upgrades into anything except Музыка.
-3) If nothing fits → categoryId=null. Do NOT invent new category names here.
-4) Never invent ids.
+2) Classify by genre/intent, NOT by the word «концерт» alone:
+   - comedian / stand-up / satire / humor show / Красная Бурда / Galkin-like → Юмор
+   - singers, bands, orchestras, DJ as music → Музыка
+   - film screening / documentary показ → Кино (NOT Мода)
+   - fashion runway → Мода
+3) Respect NOT lines on each card.
+4) If nothing fits → categoryId=null. Do NOT invent new category names here.
+5) Never invent ids.
 
 JSON only:
 {"results":[{"id":"...","categoryId":"...|null"}]}`;
@@ -561,9 +568,158 @@ JSON only:
   };
 }
 
+/**
+ * Categorize one event using official page scrape + optional web_search.
+ * Prefer genre from SOURCE FACTS over misleading title words («концерт», «показ»).
+ *
+ * @returns {Promise<{ categoryId: string|null, categoryName: string|null, usedWeb: boolean, pageOk: boolean, confidence: number, usage: object, sourceFacts: string }>}
+ */
+export async function categorizeEventWithWeb(event, { forceWebSearch = false } = {}) {
+  const usage = {
+    prompt_tokens: 0,
+    completion_tokens: 0,
+    total_tokens: 0,
+    batches: 0,
+  };
+  const addU = (u) => {
+    if (!u) return;
+    if (u.prompt_tokens != null || u.completion_tokens != null) {
+      usage.prompt_tokens += Number(u.prompt_tokens) || 0;
+      usage.completion_tokens += Number(u.completion_tokens) || 0;
+      usage.total_tokens += Number(u.total_tokens)
+        || ((Number(u.prompt_tokens) || 0) + (Number(u.completion_tokens) || 0));
+    }
+    if (u.input_tokens != null || u.output_tokens != null) {
+      usage.prompt_tokens += Number(u.input_tokens) || 0;
+      usage.completion_tokens += Number(u.output_tokens) || 0;
+      usage.total_tokens += (Number(u.input_tokens) || 0) + (Number(u.output_tokens) || 0);
+    }
+    usage.batches += 1;
+  };
+
+  const name = String(event?.name || '').trim();
+  const description = String(event?.description || '').trim();
+  const address = String(event?.address || '').trim();
+  const website = String(
+    event?.contacts?.website || event?.website || event?.url || '',
+  ).trim();
+
+  let page = { ok: false, facts: '', metaDescription: '', bodyText: '' };
+  let usedWeb = false;
+  if (website) {
+    page = await fetchEventPageFacts(website);
+  }
+
+  let webFacts = '';
+  const pageFactLen = String(page.metaDescription || '').length
+    + String(page.bodyText || '').length;
+  // For categorization always try web when page is thin OR force —
+  // also when title looks like «концерт» but may be comedy (need artist type).
+  const titleLooksAmbiguous = /концерт|показ|шоу|тур/i.test(name);
+  const needWeb = forceWebSearch
+    || !page.ok
+    || pageFactLen < 60
+    || titleLooksAmbiguous;
+
+  if (needWeb) {
+    try {
+      const web = await webSearchEventFacts({
+        name,
+        url: website || undefined,
+        address: address || undefined,
+      });
+      webFacts = web.facts || '';
+      usedWeb = Boolean(webFacts);
+      addU(web.usage);
+    } catch (e) {
+      logger.warn(`category web_search failed for "${name}": ${e.message || e}`);
+    }
+  }
+
+  const sourceFacts = [
+    page.facts || '',
+    webFacts ? `web_facts:\n${webFacts}` : '',
+  ].filter(Boolean).join('\n\n').trim();
+
+  const { prompt, categories } = await rebuildAiPromptIfNeeded();
+  const validIds = new Set((categories || []).map((c) => String(c._id)));
+  const byName = new Map(
+    (categories || [])
+      .filter((c) => c?.name && c.name !== 'Другое')
+      .map((c) => [normalizeCategoryKey(c.name), String(c._id)]),
+  );
+
+  const groundedSystem = `${prompt}
+
+ADDITIONAL (web/page grounded):
+- You ALSO receive SOURCE_FACTS from the official page and/or web search.
+- Prefer SOURCE_FACTS for event TYPE (comedy vs music vs film vs lecture).
+- Word «концерт» in the title is NOT enough for Музыка if facts say comedian/humor.
+- Word «показ» is NOT Мода if facts say film/documentary screening → Кино.
+- Literary concert / author reading / встреча с писателем / литературный вечер → Лекции/Семинары (NOT null).
+- Bands, pop/rock groups, LIVE concert by a music act (e.g. Quest Pistols) → Музыка.
+- Psychologist / coach / therapist talk or lecture → Лекции/Семинары (even if funny).
+- ALWAYS set categoryId to an EXISTING card id when possible; use categoryName as the exact Russian card name if unsure of id.
+- Prefer any fitting card over null. Null only for junk/cancelled.
+- Return JSON: {"categoryId":"...|null","categoryName":"...|null","confidence":0-100,"reason":"..."}`;
+
+  const userContent = JSON.stringify({
+    name: name.slice(0, NAME_MAX),
+    description: description && description !== name
+      ? description.slice(0, DESC_MAX)
+      : undefined,
+    address: address || undefined,
+    source_url: website || undefined,
+    SOURCE_FACTS: sourceFacts.slice(0, 2800) || undefined,
+  });
+
+  const { content, usage: u2 } = await callOpenAi(
+    groundedSystem,
+    userContent,
+    '{"categoryId":null,"categoryName":null,"confidence":0,"reason":""}',
+  );
+  addU(u2);
+
+  let parsed = {};
+  try {
+    parsed = JSON.parse(content);
+  } catch (e) {
+    parsed = {};
+  }
+
+  const sanitize = (v) => {
+    if (v == null) return null;
+    const s = String(v).trim();
+    if (!s || s === 'null' || s === 'undefined') return null;
+    return s;
+  };
+
+  let categoryId = sanitize(parsed.categoryId);
+  if (categoryId && !validIds.has(categoryId)) {
+    categoryId = null;
+  }
+  const rawName = sanitize(parsed.categoryName);
+  if (!categoryId && rawName) {
+    categoryId = byName.get(normalizeCategoryKey(rawName)) || null;
+  }
+
+  const cat = (categories || []).find((c) => String(c._id) === categoryId);
+  return {
+    categoryId,
+    categoryName: cat?.name || null,
+    usedWeb,
+    pageOk: !!page.ok,
+    confidence: Number(parsed.confidence) || 0,
+    reason: parsed.reason ? String(parsed.reason).slice(0, 300) : '',
+    usage,
+    sourceFacts,
+  };
+}
+
 export default {
   rebuildAiPromptIfNeeded,
   categorizeEventsWithAi,
+  categorizeEventWithWeb,
   proposeCategoriesFromEvents,
   computeCategoriesHash,
 };

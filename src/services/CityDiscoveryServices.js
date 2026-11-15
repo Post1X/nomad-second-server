@@ -14,6 +14,7 @@ import discoverKontramarkaCities from './cityDiscovery/discoverKontramarka';
 import discoverEventimCities from './cityDiscovery/discoverEventim';
 import discoverIsraelinfoCities from './cityDiscovery/discoverIsraelinfo';
 import discoverTicketmasterCities from './cityDiscovery/discoverTicketmaster';
+import discoverShowmanCities from './cityDiscovery/discoverShowman';
 
 const logger = createLoggerWithSource('CITY_DISCOVERY');
 
@@ -22,6 +23,7 @@ const SUPPORTED = {
   [EVENT_SOURCE.eventim]: discoverEventimCities,
   [EVENT_SOURCE.israelinfo]: discoverIsraelinfoCities,
   [EVENT_SOURCE.ticketmaster]: discoverTicketmasterCities,
+  [EVENT_SOURCE.showman]: discoverShowmanCities,
 };
 
 class CityDiscoveryServices {

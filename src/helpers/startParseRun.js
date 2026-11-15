@@ -10,6 +10,7 @@ import parseEventim from '../operations/parseEventim';
 import parseKontramarka from '../operations/parseKontramarka';
 import parseTicketmaster from '../operations/parseTicketmaster';
 import parseIsraelinfo from '../operations/parseIsraelinfo';
+import parseShowman from '../operations/parseShowman';
 import { ParseRunCancelledError, markParseRunCancelled } from './logParseRun';
 import { createLoggerWithSource } from './logger';
 
@@ -21,6 +22,7 @@ const PARSERS = {
   [OPERATION_TYPES.parsingEventsFromKontramarka]: parseKontramarka,
   [OPERATION_TYPES.parsingEventsFromTicketmaster]: parseTicketmaster,
   [OPERATION_TYPES.parsingEventsFromIsraelinfo]: parseIsraelinfo,
+  [OPERATION_TYPES.parsingEventsFromShowman]: parseShowman,
 };
 
 export async function startParseRun(typeOrSource, meta = {}) {

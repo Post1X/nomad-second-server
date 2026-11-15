@@ -408,6 +408,7 @@ async function parseKontramarka({ meta = {}, runId }) {
                 contacts: { website: g.tourUrl },
                 photos: g.photoUrl ? [{ full_url: g.photoUrl }] : [],
                 holding_date: holdingDateStr,
+                holding_dates_list: g.dates || [],
                 date_start: dateStart,
                 date_end: dateEnd,
                 source: EVENT_SOURCE.kontramarka,

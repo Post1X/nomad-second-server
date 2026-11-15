@@ -53,18 +53,32 @@ const findCityBySingleTerm = (cities, targetName = '') => {
  * Ищет город в DB по внешнему названию (TM, Eventim, адрес и т.д.).
  * Учитывает CITY_ALIASES и формат "Русский | Local | English" в Cities.name.
  */
-export const findCityInDb = (cities, targetName = '') => {
+export const findCityInDb = (cities, targetName = '', options = {}) => {
+  const preferCountryId = options?.preferCountryId
+    ? String(options.preferCountryId)
+    : null;
+
   const parts = splitCityNameParts(targetName);
   const namesToTry = parts.length > 1 ? parts : [targetName];
 
-  for (const name of namesToTry) {
-    const variants = getCitySearchVariants(name);
-    for (const term of variants) {
-      const match = findCityBySingleTerm(cities, term);
-      if (match) return match;
+  const searchIn = (pool) => {
+    for (const name of namesToTry) {
+      const variants = getCitySearchVariants(name);
+      for (const term of variants) {
+        const match = findCityBySingleTerm(pool, term);
+        if (match) return match;
+      }
     }
+    return null;
+  };
+
+  if (preferCountryId) {
+    const preferred = cities.filter((c) => c?.country_id && String(c.country_id) === preferCountryId);
+    const hit = searchIn(preferred);
+    if (hit) return hit;
   }
-  return null;
+
+  return searchIn(cities);
 };
 
 export default findCityInDb;

@@ -31,6 +31,7 @@ const formatDayRanges = (dayNumbers) => {
   return result.join(', ');
 };
 
+/** Unique calendar days (time stripped) — for display strings / text parse. */
 const uniqueSortedDays = (dates = []) => {
   const valid = (dates || [])
     .map((d) => (d instanceof Date ? d : new Date(d)))
@@ -43,6 +44,23 @@ const uniqueSortedDays = (dates = []) => {
     if (seen.has(key)) continue;
     seen.add(key);
     unique.push(new Date(d.getFullYear(), d.getMonth(), d.getDate()));
+  }
+  return unique;
+};
+
+/** Unique datetimes as-is (time preserved) — for holding_dates_list storage. */
+const uniqueSortedDatetimes = (dates = []) => {
+  const valid = (dates || [])
+    .map((d) => (d instanceof Date ? new Date(d.getTime()) : new Date(d)))
+    .filter((d) => !Number.isNaN(d.getTime()))
+    .sort((a, b) => a.getTime() - b.getTime());
+  const unique = [];
+  const seen = new Set();
+  for (const d of valid) {
+    const key = d.getTime();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    unique.push(d);
   }
   return unique;
 };
@@ -168,8 +186,6 @@ export const parseHoldingDate = (holdingDate = '') => {
   }
   if (matchedNumeric) return uniqueSortedDays(out);
 
-  // RU locale: "1–3 сентября 2026" or "12, 15 сентября 2026"
-  // genitive (display) + nominative (moment MMMM) variants
   const months = {
     января: 0, январь: 0,
     февраля: 1, февраль: 1,
@@ -184,28 +200,114 @@ export const parseHoldingDate = (holdingDate = '') => {
     ноября: 10, ноябрь: 10,
     декабря: 11, декабрь: 11,
   };
-  const yearMatch = text.match(/\b(20\d{2})\b/);
-  const year = yearMatch ? parseInt(yearMatch[1], 10) : new Date().getFullYear();
-  const lower = text.toLowerCase();
-  const monthName = Object.keys(months)
-    .sort((a, b) => b.length - a.length)
-    .find((name) => lower.includes(name));
-  if (monthName != null) {
-    const month = months[monthName];
-    const beforeMonth = lower.split(monthName)[0] || '';
-    const range = beforeMonth.match(/(\d{1,2})\s*[–-]\s*(\d{1,2})/);
-    if (range) {
-      const a = parseInt(range[1], 10);
-      const b = parseInt(range[2], 10);
-      for (let d = a; d <= b; d += 1) pushDay(year, month, d);
-      return uniqueSortedDays(out);
+  const monthNames = Object.keys(months).sort((a, b) => b.length - a.length);
+  const monthAlt = monthNames.join('|');
+
+  const daysFromTokens = (dayPart, year, month) => {
+    const days = [];
+    const tokenRe = /(\d{1,2})\s*[–-]\s*(\d{1,2})|(\d{1,2})/g;
+    let tm;
+    while ((tm = tokenRe.exec(dayPart)) !== null) {
+      if (tm[1] != null) {
+        const a = parseInt(tm[1], 10);
+        const b = parseInt(tm[2], 10);
+        for (let d = a; d <= b; d += 1) days.push(new Date(year, month, d));
+      } else {
+        days.push(new Date(year, month, parseInt(tm[3], 10)));
+      }
     }
-    for (const bit of beforeMonth.match(/\d{1,2}/g) || []) {
-      pushDay(year, month, parseInt(bit, 10));
+    return days;
+  };
+
+  const fallbackYear = (() => {
+    const years = [...text.matchAll(/\b(20\d{2})\b/g)].map((x) => parseInt(x[1], 10));
+    if (!years.length) return new Date().getFullYear();
+    return years[years.length - 1];
+  })();
+
+  // Chunks like: "15, 22, 29 сентябрь" / "6–8, 10 май 2027" / "1–2 октябрь 2026"
+  const chunkRe = new RegExp(
+    `((?:\\d{1,2}\\s*[–-]\\s*\\d{1,2}|\\d{1,2})(?:\\s*,\\s*(?:\\d{1,2}\\s*[–-]\\s*\\d{1,2}|\\d{1,2}))*)\\s+(${monthAlt})(?:\\s+(20\\d{2}))?`,
+    'gi',
+  );
+  const chunks = [];
+  let cm;
+  while ((cm = chunkRe.exec(text)) !== null) {
+    chunks.push({
+      dayPart: cm[1],
+      month: months[cm[2].toLowerCase()],
+      year: cm[3] ? parseInt(cm[3], 10) : null,
+    });
+  }
+
+  if (chunks.length) {
+    let year = fallbackYear;
+    for (let i = chunks.length - 1; i >= 0; i -= 1) {
+      if (chunks[i].year != null) year = chunks[i].year;
+      else chunks[i].year = year;
     }
+    for (const ch of chunks) {
+      out.push(...daysFromTokens(ch.dayPart, ch.year, ch.month));
+    }
+    return uniqueSortedDays(out);
   }
 
   return uniqueSortedDays(out);
+};
+
+export const toHoldingDatesList = (input) => {
+  if (!Array.isArray(input) || !input.length) return [];
+  return uniqueSortedDatetimes(input.map((item) => {
+    if (item instanceof Date) return item;
+    if (typeof item === 'string') {
+      const ymd = item.trim().match(/^(\d{4})-(\d{2})-(\d{2})$/);
+      if (ymd) {
+        return new Date(
+          Date.UTC(
+            parseInt(ymd[1], 10),
+            parseInt(ymd[2], 10) - 1,
+            parseInt(ymd[3], 10),
+          ),
+        );
+      }
+    }
+    return new Date(item);
+  }));
+};
+
+export const resolveHoldingFields = ({
+  holding_date,
+  holding_dates_list,
+  date_start,
+  date_end,
+} = {}) => {
+  let list = toHoldingDatesList(holding_dates_list);
+  const rawHolding = holding_date == null ? '' : String(holding_date).trim();
+
+  if (!list.length && rawHolding) {
+    list = parseHoldingDate(rawHolding);
+  }
+
+  let legacy = rawHolding;
+  if (!legacy && list.length) {
+    legacy = formatHoldingDate(list);
+  }
+
+  return {
+    holding_date: legacy,
+    holding_dates_list: list,
+    date_start: list.length ? list[0] : (date_start || null),
+    date_end: list.length ? list[list.length - 1] : (date_end || null),
+  };
+};
+
+export const attachHoldingDatesList = (event) => {
+  if (!event || typeof event !== 'object') return event;
+  const list = Array.isArray(event.holding_dates_list) ? event.holding_dates_list : [];
+  if (list.length) {
+    return { ...event, holding_dates_list: toHoldingDatesList(list) };
+  }
+  return { ...event, holding_dates_list: parseHoldingDate(event.holding_date) };
 };
 
 export const mergeHoldingDates = (...holdingOrDateLists) => {
@@ -214,10 +316,12 @@ export const mergeHoldingDates = (...holdingOrDateLists) => {
     if (Array.isArray(item)) all.push(...item);
     else if (typeof item === 'string') all.push(...parseHoldingDate(item));
     else if (item instanceof Date) all.push(item);
+    else if (item) all.push(new Date(item));
   }
-  const unique = uniqueSortedDays(all);
+  const unique = uniqueSortedDatetimes(all);
   return {
     dates: unique,
+    holding_dates_list: unique,
     holding_date: formatHoldingDate(unique),
     date_start: unique.length ? unique[0] : null,
     date_end: unique.length ? unique[unique.length - 1] : null,
@@ -228,5 +332,8 @@ export default {
   formatHoldingDate,
   formatHoldingDateNumeric,
   parseHoldingDate,
+  toHoldingDatesList,
+  resolveHoldingFields,
+  attachHoldingDatesList,
   mergeHoldingDates,
 };

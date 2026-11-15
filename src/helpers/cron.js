@@ -61,6 +61,15 @@ export const CRON_JOBS = [
     meta: {},
   },
   {
+    id: 'showman',
+    expr: '0 5 * * 0',
+    label: 'Showman (weekly)',
+    kind: 'parse',
+    source: EVENT_SOURCE.showman,
+    type: OPERATION_TYPES.parsingEventsFromShowman,
+    meta: {},
+  },
+  {
     id: 'dictSync',
     expr: '0 1 * * 0',
     label: 'Dictionary sync from main',

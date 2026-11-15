@@ -185,6 +185,7 @@ export async function enrichFromTicketmaster(items = []) {
         currency,
         price_source: priceSource,
         holding_date: dates.holding_date,
+        holding_dates_list: dates.date_start ? [dates.date_start] : [],
         date_start: dates.date_start,
         date_end: dates.date_end,
         timezone: dates.timezone,
